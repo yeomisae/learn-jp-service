@@ -74,8 +74,7 @@ public class GoogleSheetsService {
     private List<List<Object>> buildSheetData(Collection<Map<String, Object>> words) {
         List<List<Object>> data = new ArrayList<>();
 
-        data.add(List.of("Word (W)", "Meaning (M)", "Part of Speech (POS)", "Pronunciation (P)",
-            "Synonyms (S)", "Antonyms (A)", "Description (D)", "Bookmark (B)", "Image (I)", "Calendar Date (C)"));
+        data.add(List.of("W", "M", "POS", "P", "S", "A", "D", "B", "I", "C"));
 
         for (Map<String, Object> word : words) {
             String createdAt = "";
