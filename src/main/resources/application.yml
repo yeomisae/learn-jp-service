@@ -13,3 +13,8 @@ openclaw:
   base-url: ${OPENCLAW_BASE_URL:http://127.0.0.1:18789/v1}
   api-key: ${OPENCLAW_API_KEY}
   model: ${OPENCLAW_MODEL:openclaw:jp-analyzer}
+
+google:
+  sheets:
+    credentials-path: ${GOOGLE_SHEETS_CREDENTIALS_PATH:}
+    spreadsheet-id: ${GOOGLE_SHEETS_SPREADSHEET_ID:}
