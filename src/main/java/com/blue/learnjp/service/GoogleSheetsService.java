@@ -45,7 +45,7 @@ public class GoogleSheetsService {
         String spreadsheetId = config.spreadsheetId();
 
         Collection<Map<String, Object>> words = neo4jClient.query(
-            "MATCH (w:Word) RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
+            "MATCH (w:Word) RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.jlptLevel AS jlptLevel, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
         ).fetch().all();
 
         log.info("Exporting {} words to spreadsheet: {}", words.size(), spreadsheetId);
@@ -74,7 +74,7 @@ public class GoogleSheetsService {
     private List<List<Object>> buildSheetData(Collection<Map<String, Object>> words) {
         List<List<Object>> data = new ArrayList<>();
 
-        data.add(List.of("W", "M", "POS", "P", "S", "A", "D", "B", "I", "C"));
+        data.add(List.of("W", "M", "POS", "P", "S", "A", "D", "JLPT", "B", "I", "C"));
 
         for (Map<String, Object> word : words) {
             String createdAt = "";
@@ -96,6 +96,7 @@ public class GoogleSheetsService {
                 nullSafe(word.get("synonyms")),
                 nullSafe(word.get("antonyms")),
                 nullSafe(word.get("description")),
+                nullSafe(word.get("jlptLevel")),
                 bookmark,
                 nullSafe(word.get("image")),
                 createdAt

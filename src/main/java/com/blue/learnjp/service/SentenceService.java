@@ -57,7 +57,8 @@ public class SentenceService {
                 word.pos(),
                 word.synonyms(),
                 word.antonyms(),
-                word.description()
+                word.description(),
+                word.jlptLevel()
             );
         }
 

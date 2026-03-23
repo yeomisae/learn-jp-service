@@ -25,7 +25,7 @@ public class GraphRepository {
      * APOC 없이 Java에서 병합 처리.
      */
     public void mergeWord(String surface, String lemma, String reading, String meaning, String pos,
-                          String synonyms, String antonyms, String description) {
+                          String synonyms, String antonyms, String description, String jlptLevel) {
         neo4jClient.query("""
             MERGE (w:Word {lemma: $lemma})
             ON CREATE SET w.surface = $surface,
@@ -35,12 +35,13 @@ public class GraphRepository {
                           w.synonyms = $synonyms,
                           w.antonyms = $antonyms,
                           w.description = $description,
+                          w.jlptLevel = $jlptLevel,
                           w.bookmark = 0,
                           w.image = '',
                           w.createdAt = datetime()
             RETURN w.surface AS oldSurface, w.meaning AS oldMeaning,
                    w.synonyms AS oldSynonyms, w.antonyms AS oldAntonyms,
-                   w.description AS oldDescription
+                   w.description AS oldDescription, w.jlptLevel AS oldJlptLevel
             """)
             .bind(surface).to("surface")
             .bind(lemma).to("lemma")
@@ -50,6 +51,7 @@ public class GraphRepository {
             .bind(synonyms).to("synonyms")
             .bind(antonyms).to("antonyms")
             .bind(description).to("description")
+            .bind(jlptLevel).to("jlptLevel")
             .fetch().first()
             .ifPresent(row -> {
                 String mergedSurface = mergeValues((String) row.get("oldSurface"), surface);
@@ -57,6 +59,9 @@ public class GraphRepository {
                 String mergedSynonyms = mergeValues((String) row.get("oldSynonyms"), synonyms);
                 String mergedAntonyms = mergeValues((String) row.get("oldAntonyms"), antonyms);
                 String mergedDescription = mergeValues((String) row.get("oldDescription"), description);
+                // jlptLevel: 기존 값이 있으면 유지, 없으면 새 값 설정
+                String oldJlpt = (String) row.get("oldJlptLevel");
+                String finalJlpt = (oldJlpt != null && !oldJlpt.isEmpty()) ? oldJlpt : jlptLevel;
 
                 neo4jClient.query("""
                     MATCH (w:Word {lemma: $lemma})
@@ -66,7 +71,8 @@ public class GraphRepository {
                         w.pos = $pos,
                         w.synonyms = $synonyms,
                         w.antonyms = $antonyms,
-                        w.description = $description
+                        w.description = $description,
+                        w.jlptLevel = $jlptLevel
                     """)
                     .bind(lemma).to("lemma")
                     .bind(reading).to("reading")
@@ -76,6 +82,7 @@ public class GraphRepository {
                     .bind(mergedSynonyms).to("synonyms")
                     .bind(mergedAntonyms).to("antonyms")
                     .bind(mergedDescription).to("description")
+                    .bind(finalJlpt).to("jlptLevel")
                     .run();
             });
     }

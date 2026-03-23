@@ -17,7 +17,8 @@ public record AnalysisResult(
         String meaning,
         String synonyms,
         String antonyms,
-        String description
+        String description,
+        String jlptLevel
     ) {}
 
     public record EdgeInfo(
