@@ -39,8 +39,11 @@ public class SentenceService {
                 word.surface(),
                 word.lemma(),
                 word.reading(),
+                word.meaning(),
                 word.pos(),
-                word.meaning()
+                word.synonyms(),
+                word.antonyms(),
+                word.description()
             );
         }
 

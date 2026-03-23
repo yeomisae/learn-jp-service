@@ -45,7 +45,7 @@ public class GoogleSheetsService {
         String spreadsheetId = config.spreadsheetId();
 
         Collection<Map<String, Object>> words = neo4jClient.query(
-            "MATCH (w:Word) RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.reading AS reading, w.createdAt AS createdAt ORDER BY w.createdAt"
+            "MATCH (w:Word) RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
         ).fetch().all();
 
         log.info("Exporting {} words to spreadsheet: {}", words.size(), spreadsheetId);
@@ -74,7 +74,8 @@ public class GoogleSheetsService {
     private List<List<Object>> buildSheetData(Collection<Map<String, Object>> words) {
         List<List<Object>> data = new ArrayList<>();
 
-        data.add(List.of("Word (W)", "Meaning (M)", "Part of Speech (POS)", "Pronunciation (P)", "Calendar Date (C)"));
+        data.add(List.of("Word (W)", "Meaning (M)", "Part of Speech (POS)", "Pronunciation (P)",
+            "Synonyms (S)", "Antonyms (A)", "Description (D)", "Bookmark (B)", "Image (I)", "Calendar Date (C)"));
 
         for (Map<String, Object> word : words) {
             String createdAt = "";
@@ -85,11 +86,19 @@ public class GoogleSheetsService {
                 createdAt = raw.toString();
             }
 
+            Object bookmarkVal = word.get("bookmark");
+            String bookmark = bookmarkVal != null ? bookmarkVal.toString() : "0";
+
             data.add(List.of(
                 nullSafe(word.get("lemma")),
                 nullSafe(word.get("meaning")),
                 nullSafe(word.get("pos")),
                 nullSafe(word.get("reading")),
+                nullSafe(word.get("synonyms")),
+                nullSafe(word.get("antonyms")),
+                nullSafe(word.get("description")),
+                bookmark,
+                nullSafe(word.get("image")),
                 createdAt
             ));
         }

@@ -14,7 +14,10 @@ public record AnalysisResult(
         String lemma,
         String reading,
         String pos,
-        String meaning
+        String meaning,
+        String synonyms,
+        String antonyms,
+        String description
     ) {}
 
     public record EdgeInfo(

@@ -21,24 +21,36 @@ public class GraphRepository {
     /**
      * 단어 노드를 MERGE한다. 있으면 갱신, 없으면 생성.
      */
-    public void mergeWord(String surface, String lemma, String reading, String meaning, String pos) {
+    public void mergeWord(String surface, String lemma, String reading, String meaning, String pos,
+                          String synonyms, String antonyms, String description) {
         neo4jClient.query("""
             MERGE (w:Word {lemma: $lemma})
             ON CREATE SET w.surface = $surface,
                           w.reading = $reading,
                           w.meaning = $meaning,
                           w.pos = $pos,
+                          w.synonyms = $synonyms,
+                          w.antonyms = $antonyms,
+                          w.description = $description,
+                          w.bookmark = 0,
+                          w.image = '',
                           w.createdAt = datetime()
             ON MATCH SET  w.surface = $surface,
                           w.reading = $reading,
                           w.meaning = $meaning,
-                          w.pos = $pos
+                          w.pos = $pos,
+                          w.synonyms = $synonyms,
+                          w.antonyms = $antonyms,
+                          w.description = $description
             """)
             .bind(surface).to("surface")
             .bind(lemma).to("lemma")
             .bind(reading).to("reading")
             .bind(meaning).to("meaning")
             .bind(pos).to("pos")
+            .bind(synonyms).to("synonyms")
+            .bind(antonyms).to("antonyms")
+            .bind(description).to("description")
             .run();
     }
 
