@@ -7,11 +7,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Optional;
+
 /**
  * 문장 입력 파이프라인의 핵심 서비스.
  * 1. OpenClaw로 문장 분석
  * 2. 노드 MERGE
  * 3. 엣지 CREATE
+ * 4. Google Sheets 동기화 (설정 시)
  */
 @Service
 public class SentenceService {
@@ -20,10 +23,13 @@ public class SentenceService {
 
     private final OpenClawService openClawService;
     private final GraphRepository graphRepository;
+    private final Optional<GoogleSheetsService> googleSheetsService;
 
-    public SentenceService(OpenClawService openClawService, GraphRepository graphRepository) {
+    public SentenceService(OpenClawService openClawService, GraphRepository graphRepository,
+                           Optional<GoogleSheetsService> googleSheetsService) {
         this.openClawService = openClawService;
         this.graphRepository = graphRepository;
+        this.googleSheetsService = googleSheetsService;
     }
 
     @Transactional
@@ -56,6 +62,15 @@ public class SentenceService {
                 edge.pattern()
             );
         }
+
+        // 4. Google Sheets 동기화
+        googleSheetsService.ifPresent(sheets -> {
+            try {
+                sheets.exportWords();
+            } catch (Exception e) {
+                log.warn("Google Sheets sync failed (non-blocking): {}", e.getMessage());
+            }
+        });
 
         return result;
     }
