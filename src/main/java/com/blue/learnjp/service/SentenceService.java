@@ -34,12 +34,20 @@ public class SentenceService {
 
     @Transactional
     public AnalysisResult process(String sentence) {
-        // 1. OpenClaw 분석
         AnalysisResult result = openClawService.analyze(sentence);
-
         log.info("Analysis result - words: {}, edges: {}", result.words().size(), result.edges().size());
+        saveAndSync(sentence, result);
+        return result;
+    }
 
-        // 2. 노드 MERGE
+    @Transactional
+    public AnalysisResult importResult(String sentence, AnalysisResult result) {
+        log.info("Importing pre-analyzed result - words: {}, edges: {}", result.words().size(), result.edges().size());
+        saveAndSync(sentence, result);
+        return result;
+    }
+
+    private void saveAndSync(String sentence, AnalysisResult result) {
         for (AnalysisResult.WordInfo word : result.words()) {
             graphRepository.mergeWord(
                 word.surface(),
@@ -53,7 +61,6 @@ public class SentenceService {
             );
         }
 
-        // 3. 엣지 CREATE
         for (AnalysisResult.EdgeInfo edge : result.edges()) {
             graphRepository.createCoOccursEdge(
                 edge.from(),
@@ -63,7 +70,6 @@ public class SentenceService {
             );
         }
 
-        // 4. Google Sheets 동기화
         googleSheetsService.ifPresent(sheets -> {
             try {
                 sheets.exportWords();
@@ -71,7 +77,5 @@ public class SentenceService {
                 log.warn("Google Sheets sync failed (non-blocking): {}", e.getMessage());
             }
         });
-
-        return result;
     }
 }

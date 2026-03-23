@@ -1,6 +1,7 @@
 package com.blue.learnjp.controller;
 
 import com.blue.learnjp.dto.AnalysisResult;
+import com.blue.learnjp.dto.ImportRequest;
 import com.blue.learnjp.service.SentenceService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,6 +29,20 @@ public class SentenceController {
         }
 
         AnalysisResult result = sentenceService.process(sentence);
+        return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/words/import")
+    public ResponseEntity<AnalysisResult> importWords(@RequestBody ImportRequest request) {
+        if (request.sentence() == null || request.sentence().isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        if (request.words() == null || request.words().isEmpty()) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        AnalysisResult result = new AnalysisResult(request.words(), request.edges() != null ? request.edges() : java.util.List.of());
+        sentenceService.importResult(request.sentence(), result);
         return ResponseEntity.ok(result);
     }
 }
