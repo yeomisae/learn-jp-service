@@ -34,6 +34,11 @@ public class SentenceService {
 
     @Transactional
     public AnalysisResult process(String sentence) {
+        if (graphRepository.sentenceExists(sentence)) {
+            log.info("Sentence already registered, skipping: {}", sentence);
+            return new AnalysisResult(java.util.List.of(), java.util.List.of());
+        }
+
         AnalysisResult result = openClawService.analyze(sentence);
         log.info("Analysis result - words: {}, edges: {}", result.words().size(), result.edges().size());
         saveAndSync(sentence, result);
@@ -42,12 +47,21 @@ public class SentenceService {
 
     @Transactional
     public AnalysisResult importResult(String sentence, AnalysisResult result) {
+        if (sentence != null && !sentence.isBlank() && graphRepository.sentenceExists(sentence)) {
+            log.info("Sentence already registered, skipping: {}", sentence);
+            return new AnalysisResult(java.util.List.of(), java.util.List.of());
+        }
+
         log.info("Importing pre-analyzed result - words: {}, edges: {}", result.words().size(), result.edges().size());
         saveAndSync(sentence, result);
         return result;
     }
 
     private void saveAndSync(String sentence, AnalysisResult result) {
+        if (sentence != null && !sentence.isBlank()) {
+            graphRepository.createSentence(sentence);
+        }
+
         for (AnalysisResult.WordInfo word : result.words()) {
             graphRepository.mergeWord(
                 word.surface(),
