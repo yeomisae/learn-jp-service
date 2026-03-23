@@ -20,6 +20,11 @@ repositories {
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-neo4j'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
+
+	// Google Sheets API
+	implementation 'com.google.apis:google-api-services-sheets:v4-rev20251110-2.0.0'
+	implementation 'com.google.auth:google-auth-library-oauth2-http:1.23.0'
+
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
