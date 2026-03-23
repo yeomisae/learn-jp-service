@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: learn-jp-service
+
+  neo4j:
+    uri: bolt://localhost:7687
+    authentication:
+      username: neo4j
+      password: ${NEO4J_PASSWORD}
+
+  # OpenClaw (OpenAI 호환 API)
+openclaw:
+  base-url: ${OPENCLAW_BASE_URL:http://127.0.0.1:18789/v1}
+  api-key: ${OPENCLAW_API_KEY}
+  model: ${OPENCLAW_MODEL:openclaw:jp-analyzer}
