@@ -3,8 +3,7 @@ package com.blue.learnjp.repository;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Repository;
 
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Neo4jClient를 사용한 Cypher 직접 실행 Repository.
@@ -102,6 +101,48 @@ public class GraphRepository {
             }
         }
         return String.join(",", values);
+    }
+
+    /**
+     * 품질 보완이 필요한 Word 노드를 조회한다.
+     */
+    public List<Map<String, Object>> findWordsNeedingEnrichment(int limit) {
+        return neo4jClient.query("""
+            MATCH (w:Word)
+            WHERE w.pos IS NULL OR w.pos = ''
+               OR w.synonyms IS NULL OR w.synonyms = ''
+               OR w.antonyms IS NULL OR w.antonyms = ''
+               OR w.description IS NULL OR w.description = ''
+               OR w.meaning =~ '.*[a-zA-Z]{3,}.*'
+            RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos,
+                   w.synonyms AS synonyms, w.antonyms AS antonyms,
+                   w.description AS description, w.jlptLevel AS jlptLevel
+            LIMIT $limit
+            """)
+            .bind(limit).to("limit")
+            .fetch().all().stream().toList();
+    }
+
+    /**
+     * Word 노드의 품질 필드를 업데이트한다.
+     */
+    public void updateWordEnrichment(String lemma, String meaning, String pos,
+                                     String synonyms, String antonyms, String description) {
+        neo4jClient.query("""
+            MATCH (w:Word {lemma: $lemma})
+            SET w.meaning = $meaning,
+                w.pos = $pos,
+                w.synonyms = $synonyms,
+                w.antonyms = $antonyms,
+                w.description = $description
+            """)
+            .bind(lemma).to("lemma")
+            .bind(meaning).to("meaning")
+            .bind(pos).to("pos")
+            .bind(synonyms).to("synonyms")
+            .bind(antonyms).to("antonyms")
+            .bind(description).to("description")
+            .run();
     }
 
     /**
