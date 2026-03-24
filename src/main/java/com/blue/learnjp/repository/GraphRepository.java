@@ -105,6 +105,24 @@ public class GraphRepository {
     }
 
     /**
+     * 문장이 이미 등록되어 있는지 확인한다.
+     */
+    public boolean sentenceExists(String text) {
+        return neo4jClient.query("MATCH (s:Sentence {text: $text}) RETURN s")
+            .bind(text).to("text")
+            .fetch().first().isPresent();
+    }
+
+    /**
+     * 문장 노드를 생성한다.
+     */
+    public void createSentence(String text) {
+        neo4jClient.query("CREATE (s:Sentence {text: $text, createdAt: datetime()})")
+            .bind(text).to("text")
+            .run();
+    }
+
+    /**
      * 두 단어 사이에 CO_OCCURS 엣지를 CREATE한다.
      * 같은 쌍이라도 문장마다 별도 엣지를 생성한다.
      */
