@@ -110,6 +110,7 @@ public class GraphRepository {
         return neo4jClient.query("""
             MATCH (w:Word)
             WHERE w.pos IS NULL OR w.pos = ''
+               OR w.meaning IS NULL OR w.meaning = ''
             RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos,
                    w.synonyms AS synonyms, w.antonyms AS antonyms,
                    w.description AS description, w.jlptLevel AS jlptLevel
