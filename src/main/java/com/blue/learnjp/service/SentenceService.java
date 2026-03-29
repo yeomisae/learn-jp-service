@@ -7,6 +7,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -62,19 +65,7 @@ public class SentenceService {
             graphRepository.createSentence(sentence);
         }
 
-        for (AnalysisResult.WordInfo word : result.words()) {
-            graphRepository.mergeWord(
-                word.surface(),
-                word.lemma(),
-                word.reading(),
-                word.meaning(),
-                word.pos(),
-                word.synonyms(),
-                word.antonyms(),
-                word.description(),
-                word.jlptLevel()
-            );
-        }
+        saveWords(result.words());
 
         for (AnalysisResult.EdgeInfo edge : result.edges()) {
             graphRepository.createCoOccursEdge(
@@ -92,5 +83,58 @@ public class SentenceService {
                 log.warn("Google Sheets sync failed (non-blocking): {}", e.getMessage());
             }
         });
+    }
+
+    /**
+     * 분석 결과의 단어를 저장한다.
+     * - 신규 단어: mergeWord (ON CREATE)
+     * - 기존 단어: reconcile로 의미적 중복 제거 후 setWordFields (덮어쓰기)
+     * - reconcile 실패 시 기존 mergeWord 방식 fallback
+     */
+    private void saveWords(List<AnalysisResult.WordInfo> words) {
+        if (words.isEmpty()) return;
+
+        List<String> lemmas = words.stream().map(AnalysisResult.WordInfo::lemma).toList();
+        Map<String, Map<String, Object>> existingWords = graphRepository.findWordsByLemmas(lemmas);
+
+        // 기존 단어가 없으면 전부 mergeWord로 저장
+        if (existingWords.isEmpty()) {
+            for (AnalysisResult.WordInfo w : words) {
+                graphRepository.mergeWord(w.surface(), w.lemma(), w.reading(),
+                    w.meaning(), w.pos(), w.synonyms(), w.antonyms(), w.description(), w.jlptLevel());
+            }
+            return;
+        }
+
+        // reconcile 대상 분류
+        List<AnalysisResult.WordInfo> needsReconcile = words.stream()
+            .filter(w -> existingWords.containsKey(w.lemma()))
+            .toList();
+
+        log.info("Reconciling {} existing words out of {} total", needsReconcile.size(), words.size());
+
+        // reconcile 시도
+        Map<String, AnalysisResult.WordInfo> reconciledMap = new java.util.HashMap<>();
+        try {
+            List<AnalysisResult.WordInfo> reconciled = openClawService.reconcile(needsReconcile, existingWords);
+            for (AnalysisResult.WordInfo r : reconciled) {
+                reconciledMap.put(r.lemma(), r);
+            }
+        } catch (Exception e) {
+            log.warn("Reconcile failed, falling back to accumulation: {}", e.getMessage());
+        }
+
+        for (AnalysisResult.WordInfo w : words) {
+            AnalysisResult.WordInfo r = reconciledMap.get(w.lemma());
+            if (r != null) {
+                // reconcile 성공한 기존 단어: 정리된 값으로 덮어쓰기
+                graphRepository.setWordFields(w.lemma(), r.surface(),
+                    r.meaning(), r.pos(), r.synonyms(), r.antonyms(), r.description());
+            } else {
+                // 신규 단어 또는 reconcile 실패: 기존 방식
+                graphRepository.mergeWord(w.surface(), w.lemma(), w.reading(),
+                    w.meaning(), w.pos(), w.synonyms(), w.antonyms(), w.description(), w.jlptLevel());
+            }
+        }
     }
 }

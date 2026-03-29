@@ -3,12 +3,28 @@ package com.blue.learnjp.repository;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Repository;
 
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Neo4jClient를 사용한 Cypher 직접 실행 Repository.
  * 노드 MERGE + 엣지 CREATE 를 하나의 트랜잭션으로 처리한다.
+ *
+ * <h3>Word 노드 스키마</h3>
+ * <ul>
+ *   <li>lemma       — 사전형(기본형). 활용형이 아닌 원형 (예: 食べる, 高い). PK 역할</li>
+ *   <li>surface     — 문장에서 실제 등장한 표기 (예: 食べました, 高かった)</li>
+ *   <li>reading     — 히라가나 읽기 (예: たべる)</li>
+ *   <li>meaning     — 한국어 뜻 (예: 먹다)</li>
+ *   <li>pos         — 품사. 일본어 품사명 (名詞, 動詞, 形容詞 등)</li>
+ *   <li>synonyms    — 일본어 유의어 (쉼표 구분)</li>
+ *   <li>antonyms    — 일본어 반의어 (쉼표 구분)</li>
+ *   <li>description — 한국어 설명 (한 줄)</li>
+ *   <li>jlptLevel   — JLPT 급수 (N1~N5)</li>
+ *   <li>bookmark    — 북마크 여부 (0 또는 1)</li>
+ *   <li>image       — 이미지 URL</li>
+ *   <li>createdAt   — 최초 생성 시각</li>
+ *   <li>updatedAt   — 마지막 수정 시각</li>
+ * </ul>
  */
 @Repository
 public class GraphRepository {
@@ -72,7 +88,8 @@ public class GraphRepository {
                         w.synonyms = $synonyms,
                         w.antonyms = $antonyms,
                         w.description = $description,
-                        w.jlptLevel = $jlptLevel
+                        w.jlptLevel = $jlptLevel,
+                        w.updatedAt = datetime()
                     """)
                     .bind(lemma).to("lemma")
                     .bind(reading).to("reading")
@@ -102,6 +119,94 @@ public class GraphRepository {
             }
         }
         return String.join(",", values);
+    }
+
+    /**
+     * 품질 보완이 필요한 Word 노드를 조회한다.
+     */
+    public List<Map<String, Object>> findWordsNeedingEnrichment(int limit) {
+        return neo4jClient.query("""
+            MATCH (w:Word)
+            WHERE w.pos IS NULL OR w.pos = ''
+               OR w.meaning IS NULL OR w.meaning = ''
+            RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos,
+                   w.synonyms AS synonyms, w.antonyms AS antonyms,
+                   w.description AS description, w.jlptLevel AS jlptLevel
+            LIMIT $limit
+            """)
+            .bind(limit).to("limit")
+            .fetch().all().stream().toList();
+    }
+
+    /**
+     * Word 노드의 품질 필드를 업데이트한다.
+     */
+    public void updateWordEnrichment(String lemma, String meaning, String pos,
+                                     String synonyms, String antonyms, String description) {
+        neo4jClient.query("""
+            MATCH (w:Word {lemma: $lemma})
+            SET w.meaning = $meaning,
+                w.pos = $pos,
+                w.synonyms = $synonyms,
+                w.antonyms = $antonyms,
+                w.description = $description,
+                w.updatedAt = datetime()
+            """)
+            .bind(lemma).to("lemma")
+            .bind(meaning).to("meaning")
+            .bind(pos).to("pos")
+            .bind(synonyms).to("synonyms")
+            .bind(antonyms).to("antonyms")
+            .bind(description).to("description")
+            .run();
+    }
+
+    /**
+     * 기존 Word 노드의 누적 필드를 reconcile된 최종값으로 덮어쓴다 (누적 아님).
+     * reconcile 후 의미적 중복이 제거된 값을 직접 SET한다.
+     */
+    public void setWordFields(String lemma, String surface, String meaning, String pos,
+                              String synonyms, String antonyms, String description) {
+        neo4jClient.query("""
+            MATCH (w:Word {lemma: $lemma})
+            SET w.surface = $surface,
+                w.meaning = $meaning,
+                w.pos = $pos,
+                w.synonyms = $synonyms,
+                w.antonyms = $antonyms,
+                w.description = $description,
+                w.updatedAt = datetime()
+            """)
+            .bind(lemma).to("lemma")
+            .bind(surface).to("surface")
+            .bind(meaning).to("meaning")
+            .bind(pos).to("pos")
+            .bind(synonyms).to("synonyms")
+            .bind(antonyms).to("antonyms")
+            .bind(description).to("description")
+            .run();
+    }
+
+    /**
+     * 주어진 lemma 목록에 해당하는 기존 Word 노드의 누적 필드를 조회한다.
+     * reconcile(의미적 중복 제거) 시 기존 데이터 참조용.
+     */
+    public Map<String, Map<String, Object>> findWordsByLemmas(List<String> lemmas) {
+        Collection<Map<String, Object>> rows = neo4jClient.query("""
+            MATCH (w:Word) WHERE w.lemma IN $lemmas
+            RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos,
+                   w.synonyms AS synonyms, w.antonyms AS antonyms,
+                   w.description AS description, w.surface AS surface
+            """)
+            .bind(lemmas).to("lemmas")
+            .fetch().all();
+
+        Map<String, Map<String, Object>> result = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            String lemma = (String) row.get("lemma");
+            result.put(lemma, row);
+        }
+        return result;
     }
 
     /**

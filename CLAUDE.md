@@ -60,3 +60,30 @@ com.blue.learnjp/
   dto/           AnalysisResult, WordInfo, EdgeInfo
   config/        OpenClawConfig (@ConfigurationProperties record)
 ```
+
+## 서버 실행 환경
+
+macOS launchd로 자동 실행 및 자동 재시작 설정되어 있음.
+
+- **plist 경로**: `~/Library/LaunchAgents/com.blue.learnjp.plist`
+- **Label**: `com.blue.learnjp`
+- **RunAtLoad**: true (로그인 시 자동 시작)
+- **KeepAlive**: true (프로세스 종료 시 자동 재시작)
+- **실행 JAR**: `build/libs/learn-jp-service-0.0.1-SNAPSHOT.jar`
+- **로그**: `~/.config/learn-jp/stdout.log`, `~/.config/learn-jp/stderr.log`
+
+### 서버 재시작 방법
+
+```bash
+# 새 빌드 후 재시작 (KeepAlive가 자동으로 다시 띄워줌)
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew build -x test
+launchctl stop com.blue.learnjp
+```
+
+`kill`로 직접 죽여도 launchd가 자동 재시작하지만, `launchctl stop` 사용을 권장.
+
+## 빌드
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew build -x test
+```
