@@ -22,6 +22,7 @@ import java.util.*;
  *   <li>jlptLevel   — JLPT 급수 (N1~N5)</li>
  *   <li>bookmark    — 북마크 여부 (0 또는 1)</li>
  *   <li>image       — 이미지 URL</li>
+ *   <li>source      — 등록 출처 (쉼표 구분 누적: JLPT, NEWS, MANUAL, ANIME 등)</li>
  *   <li>createdAt   — 최초 생성 시각</li>
  *   <li>updatedAt   — 마지막 수정 시각</li>
  * </ul>
@@ -41,7 +42,8 @@ public class GraphRepository {
      * APOC 없이 Java에서 병합 처리.
      */
     public void mergeWord(String surface, String lemma, String reading, String meaning, String pos,
-                          String synonyms, String antonyms, String description, String jlptLevel) {
+                          String synonyms, String antonyms, String description, String jlptLevel,
+                          String source) {
         neo4jClient.query("""
             MERGE (w:Word {lemma: $lemma})
             ON CREATE SET w.surface = $surface,
@@ -52,12 +54,14 @@ public class GraphRepository {
                           w.antonyms = $antonyms,
                           w.description = $description,
                           w.jlptLevel = $jlptLevel,
+                          w.source = $source,
                           w.bookmark = 0,
                           w.image = '',
                           w.createdAt = datetime()
             RETURN w.surface AS oldSurface, w.meaning AS oldMeaning,
                    w.synonyms AS oldSynonyms, w.antonyms AS oldAntonyms,
-                   w.description AS oldDescription, w.jlptLevel AS oldJlptLevel
+                   w.description AS oldDescription, w.jlptLevel AS oldJlptLevel,
+                   w.source AS oldSource
             """)
             .bind(surface).to("surface")
             .bind(lemma).to("lemma")
@@ -68,6 +72,7 @@ public class GraphRepository {
             .bind(antonyms).to("antonyms")
             .bind(description).to("description")
             .bind(jlptLevel).to("jlptLevel")
+            .bind(source != null ? source : "").to("source")
             .fetch().first()
             .ifPresent(row -> {
                 String mergedSurface = mergeValues((String) row.get("oldSurface"), surface);
@@ -75,6 +80,7 @@ public class GraphRepository {
                 String mergedSynonyms = mergeValues((String) row.get("oldSynonyms"), synonyms);
                 String mergedAntonyms = mergeValues((String) row.get("oldAntonyms"), antonyms);
                 String mergedDescription = mergeValues((String) row.get("oldDescription"), description);
+                String mergedSource = mergeValues((String) row.get("oldSource"), source);
                 // jlptLevel: 기존 값이 있으면 유지, 없으면 새 값 설정
                 String oldJlpt = (String) row.get("oldJlptLevel");
                 String finalJlpt = (oldJlpt != null && !oldJlpt.isEmpty()) ? oldJlpt : jlptLevel;
@@ -89,6 +95,7 @@ public class GraphRepository {
                         w.antonyms = $antonyms,
                         w.description = $description,
                         w.jlptLevel = $jlptLevel,
+                        w.source = $source,
                         w.updatedAt = datetime()
                     """)
                     .bind(lemma).to("lemma")
@@ -100,6 +107,7 @@ public class GraphRepository {
                     .bind(mergedAntonyms).to("antonyms")
                     .bind(mergedDescription).to("description")
                     .bind(finalJlpt).to("jlptLevel")
+                    .bind(mergedSource).to("source")
                     .run();
             });
     }
@@ -166,7 +174,18 @@ public class GraphRepository {
      * reconcile 후 의미적 중복이 제거된 값을 직접 SET한다.
      */
     public void setWordFields(String lemma, String surface, String meaning, String pos,
-                              String synonyms, String antonyms, String description) {
+                              String synonyms, String antonyms, String description, String source) {
+        // source는 누적이므로 기존값과 merge
+        String mergedSource = source;
+        if (source != null && !source.isEmpty()) {
+            var row = neo4jClient.query("MATCH (w:Word {lemma: $lemma}) RETURN w.source AS oldSource")
+                .bind(lemma).to("lemma")
+                .fetch().first().orElse(null);
+            if (row != null) {
+                mergedSource = mergeValues((String) row.get("oldSource"), source);
+            }
+        }
+
         neo4jClient.query("""
             MATCH (w:Word {lemma: $lemma})
             SET w.surface = $surface,
@@ -175,6 +194,7 @@ public class GraphRepository {
                 w.synonyms = $synonyms,
                 w.antonyms = $antonyms,
                 w.description = $description,
+                w.source = $source,
                 w.updatedAt = datetime()
             """)
             .bind(lemma).to("lemma")
@@ -184,6 +204,7 @@ public class GraphRepository {
             .bind(synonyms).to("synonyms")
             .bind(antonyms).to("antonyms")
             .bind(description).to("description")
+            .bind(mergedSource != null ? mergedSource : "").to("source")
             .run();
     }
 

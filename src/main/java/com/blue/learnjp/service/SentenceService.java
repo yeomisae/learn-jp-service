@@ -36,7 +36,7 @@ public class SentenceService {
     }
 
     @Transactional
-    public AnalysisResult process(String sentence) {
+    public AnalysisResult process(String sentence, String source) {
         if (graphRepository.sentenceExists(sentence)) {
             log.info("Sentence already registered, skipping: {}", sentence);
             return new AnalysisResult(java.util.List.of(), java.util.List.of());
@@ -44,28 +44,28 @@ public class SentenceService {
 
         AnalysisResult result = openClawService.analyze(sentence);
         log.info("Analysis result - words: {}, edges: {}", result.words().size(), result.edges().size());
-        saveAndSync(sentence, result);
+        saveAndSync(sentence, result, source);
         return result;
     }
 
     @Transactional
-    public AnalysisResult importResult(String sentence, AnalysisResult result) {
+    public AnalysisResult importResult(String sentence, AnalysisResult result, String source) {
         if (sentence != null && !sentence.isBlank() && graphRepository.sentenceExists(sentence)) {
             log.info("Sentence already registered, skipping: {}", sentence);
             return new AnalysisResult(java.util.List.of(), java.util.List.of());
         }
 
         log.info("Importing pre-analyzed result - words: {}, edges: {}", result.words().size(), result.edges().size());
-        saveAndSync(sentence, result);
+        saveAndSync(sentence, result, source);
         return result;
     }
 
-    private void saveAndSync(String sentence, AnalysisResult result) {
+    private void saveAndSync(String sentence, AnalysisResult result, String source) {
         if (sentence != null && !sentence.isBlank()) {
             graphRepository.createSentence(sentence);
         }
 
-        saveWords(result.words());
+        saveWords(result.words(), source);
 
         for (AnalysisResult.EdgeInfo edge : result.edges()) {
             graphRepository.createCoOccursEdge(
@@ -91,7 +91,7 @@ public class SentenceService {
      * - 기존 단어: reconcile로 의미적 중복 제거 후 setWordFields (덮어쓰기)
      * - reconcile 실패 시 기존 mergeWord 방식 fallback
      */
-    private void saveWords(List<AnalysisResult.WordInfo> words) {
+    private void saveWords(List<AnalysisResult.WordInfo> words, String source) {
         if (words.isEmpty()) return;
 
         List<String> lemmas = words.stream().map(AnalysisResult.WordInfo::lemma).toList();
@@ -101,7 +101,7 @@ public class SentenceService {
         if (existingWords.isEmpty()) {
             for (AnalysisResult.WordInfo w : words) {
                 graphRepository.mergeWord(w.surface(), w.lemma(), w.reading(),
-                    w.meaning(), w.pos(), w.synonyms(), w.antonyms(), w.description(), w.jlptLevel());
+                    w.meaning(), w.pos(), w.synonyms(), w.antonyms(), w.description(), w.jlptLevel(), source);
             }
             return;
         }
@@ -129,11 +129,11 @@ public class SentenceService {
             if (r != null) {
                 // reconcile 성공한 기존 단어: 정리된 값으로 덮어쓰기
                 graphRepository.setWordFields(w.lemma(), r.surface(),
-                    r.meaning(), r.pos(), r.synonyms(), r.antonyms(), r.description());
+                    r.meaning(), r.pos(), r.synonyms(), r.antonyms(), r.description(), source);
             } else {
                 // 신규 단어 또는 reconcile 실패: 기존 방식
                 graphRepository.mergeWord(w.surface(), w.lemma(), w.reading(),
-                    w.meaning(), w.pos(), w.synonyms(), w.antonyms(), w.description(), w.jlptLevel());
+                    w.meaning(), w.pos(), w.synonyms(), w.antonyms(), w.description(), w.jlptLevel(), source);
             }
         }
     }

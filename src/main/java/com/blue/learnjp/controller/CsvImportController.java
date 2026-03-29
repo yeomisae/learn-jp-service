@@ -76,7 +76,8 @@ public class CsvImportController {
                     "",         // synonyms
                     "",         // antonyms
                     "",         // description
-                    jlptLevel   // jlptLevel
+                    jlptLevel,  // jlptLevel
+                    "JLPT"      // source
                 );
                 imported++;
             }

@@ -1,13 +1,11 @@
 package com.blue.learnjp.controller;
 
+import com.blue.learnjp.domain.Source;
 import com.blue.learnjp.dto.AnalysisResult;
 import com.blue.learnjp.dto.ImportRequest;
 import com.blue.learnjp.service.SentenceService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
@@ -23,12 +21,29 @@ public class SentenceController {
 
     @PostMapping("/sentences")
     public ResponseEntity<AnalysisResult> processSentence(@RequestBody Map<String, String> request) {
+        return processSentenceWithSource(request, null);
+    }
+
+    @PostMapping("/sentences/{source}")
+    public ResponseEntity<AnalysisResult> processSentenceWithSource(
+            @RequestBody Map<String, String> request,
+            @PathVariable(required = false) String source) {
         String sentence = request.get("sentence");
         if (sentence == null || sentence.isBlank()) {
             return ResponseEntity.badRequest().build();
         }
 
-        AnalysisResult result = sentenceService.process(sentence);
+        // source enum 검증
+        String validatedSource = "";
+        if (source != null && !source.isBlank()) {
+            try {
+                validatedSource = Source.valueOf(source.toUpperCase()).name();
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().build();
+            }
+        }
+
+        AnalysisResult result = sentenceService.process(sentence, validatedSource);
         return ResponseEntity.ok(result);
     }
 
@@ -42,7 +57,7 @@ public class SentenceController {
         }
 
         AnalysisResult result = new AnalysisResult(request.words(), request.edges() != null ? request.edges() : java.util.List.of());
-        sentenceService.importResult(request.sentence(), result);
+        sentenceService.importResult(request.sentence(), result, "");
         return ResponseEntity.ok(result);
     }
 }
