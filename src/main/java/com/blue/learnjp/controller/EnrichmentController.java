@@ -22,13 +22,9 @@ public class EnrichmentController {
      * 1배치 = 20개 단어. 기본 1배치.
      */
     @PostMapping("/enrich")
-    public ResponseEntity<Map<String, Object>> enrich(
+    public ResponseEntity<EnrichmentService.EnrichResult> enrich(
             @RequestParam(defaultValue = "1") int batches) {
-        int updated = enrichmentService.enrichBatch(batches);
-        return ResponseEntity.ok(Map.of(
-            "updated", updated,
-            "batchesRequested", batches
-        ));
+        return ResponseEntity.ok(enrichmentService.enrichBatch(batches));
     }
 
     /**
