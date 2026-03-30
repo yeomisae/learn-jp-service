@@ -46,8 +46,14 @@ public class OpenClawService {
             JsonNode root = objectMapper.readTree(response);
             String content = root.path("choices").get(0).path("message").path("content").asText();
 
+            if (content.contains("rate limit") || content.contains("Rate limit") || content.startsWith("⚠")) {
+                throw new RateLimitException("Rate limit detected in analyze response: " + content.substring(0, Math.min(200, content.length())));
+            }
+
             String json = extractJson(content);
             return objectMapper.readValue(json, AnalysisResult.class);
+        } catch (RateLimitException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to analyze sentence: {}", sentence, e);
             throw new RuntimeException("OpenClaw analysis failed", e);
@@ -174,89 +180,67 @@ public class OpenClawService {
     }
 
     /**
-     * 기존 DB 데이터와 새 분석 결과를 비교하여 의미적 중복을 제거한 최종 값을 반환한다.
-     * 기존 데이터가 있는 단어만 대상으로 하며, 다의어의 새로운 뜻은 보존한다.
+     * 단어를 형태소 분석하여 구성 요소로 분해한다.
+     * jako NOT_FOUND인 단어에 대해 호출하여 더 작은 단위로 쪼갠다.
+     * 예: "150人以上" → [{surface:"150人", lemma:"150人"}, {surface:"以上", lemma:"以上"}]
+     *     "お世話になりました" → [{surface:"お世話", lemma:"お世話"}, {surface:"なる", lemma:"なる"}]
+     * @return 분해된 단어 리스트. 분해 불가하면 빈 리스트.
      */
-    public List<AnalysisResult.WordInfo> reconcile(
-            List<AnalysisResult.WordInfo> newWords,
-            Map<String, Map<String, Object>> existingWords) {
-
-        StringBuilder prompt = new StringBuilder();
-        prompt.append("아래 단어들의 기존 DB 값과 새 분석 값을 비교해서, 의미적 중복을 제거한 최종 값을 JSON 배열로 반환해줘.\n\n");
-        prompt.append("규칙:\n");
-        prompt.append("- 의미적으로 같은 표현은 하나만 남겨 (더 자연스러운 한국어 표현 선택)\n");
-        prompt.append("- 진짜 새로운 뜻/품사는 추가 (다의어 고려)\n");
-        prompt.append("- 각 필드는 쉼표 구분 문자열로 반환\n");
-        prompt.append("- 반환 필드: lemma, surface, meaning, pos, synonyms, antonyms, description\n\n");
-
-        for (AnalysisResult.WordInfo w : newWords) {
-            Map<String, Object> existing = existingWords.get(w.lemma());
-            if (existing == null) continue;
-
-            prompt.append("---\n");
-            prompt.append("lemma: ").append(w.lemma()).append("\n");
-            prompt.append("기존 surface: ").append(nullSafe(existing.get("surface"))).append("\n");
-            prompt.append("새 surface: ").append(nullSafe(w.surface())).append("\n");
-            prompt.append("기존 meaning: ").append(nullSafe(existing.get("meaning"))).append("\n");
-            prompt.append("새 meaning: ").append(nullSafe(w.meaning())).append("\n");
-            prompt.append("기존 pos: ").append(nullSafe(existing.get("pos"))).append("\n");
-            prompt.append("새 pos: ").append(nullSafe(w.pos())).append("\n");
-            prompt.append("기존 synonyms: ").append(nullSafe(existing.get("synonyms"))).append("\n");
-            prompt.append("새 synonyms: ").append(nullSafe(w.synonyms())).append("\n");
-            prompt.append("기존 antonyms: ").append(nullSafe(existing.get("antonyms"))).append("\n");
-            prompt.append("새 antonyms: ").append(nullSafe(w.antonyms())).append("\n");
-            prompt.append("기존 description: ").append(nullSafe(existing.get("description"))).append("\n");
-            prompt.append("새 description: ").append(nullSafe(w.description())).append("\n\n");
-        }
-
-        prompt.append("JSON 배열만 반환해. 다른 텍스트 없이.");
-
+    public List<AnalysisResult.WordInfo> decompose(String word) {
         String url = config.baseUrl() + "/chat/completions";
+        String prompt = "다음 일본어 표현을 형태소 단위로 분해해줘. " +
+            "각 형태소의 surface(표층형), lemma(사전형), reading(히라가나)을 JSON 배열로 반환. " +
+            "조사·助動詞 등 문법 요소도 포함해서 모든 형태소를 반환. " +
+            "숫자+단위는 하나로 묶어서 (예: 150人 → 하나의 단어). " +
+            "JSON 배열만 반환하고 다른 텍스트 없이.\n\n" +
+            "표현: " + word;
+
         Map<String, Object> requestBody = Map.of(
             "model", "openclaw",
             "messages", List.of(
-                Map.of("role", "user", "content", prompt.toString())
+                Map.of("role", "user", "content", prompt)
             )
         );
 
         try {
             String bodyJson = objectMapper.writeValueAsString(requestBody);
-            long start = System.currentTimeMillis();
             String response = postJson(url, bodyJson);
-            log.info("OpenClaw reconcile took {}ms for {} words", System.currentTimeMillis() - start, newWords.size());
 
             JsonNode root = objectMapper.readTree(response);
             String content = root.path("choices").get(0).path("message").path("content").asText();
-            String json = extractJson(content);
 
-            JsonNode arr = objectMapper.readTree(json);
-            if (!arr.isArray()) {
-                throw new RuntimeException("Expected JSON array from reconcile: " + json.substring(0, Math.min(100, json.length())));
+            if (content.contains("rate limit") || content.contains("Rate limit") || content.startsWith("⚠")) {
+                log.warn("Rate limit in decompose for '{}'", word);
+                return List.of();
             }
+
+            String json = extractJson(content);
+            JsonNode arr = objectMapper.readTree(json);
+            if (!arr.isArray() || arr.isEmpty()) return List.of();
 
             List<AnalysisResult.WordInfo> results = new ArrayList<>();
             for (JsonNode node : arr) {
                 results.add(new AnalysisResult.WordInfo(
                     node.path("surface").asText(""),
                     node.path("lemma").asText(""),
-                    "", // reading은 reconcile 대상 아님
+                    node.path("reading").asText(""),
                     node.path("pos").asText(""),
                     node.path("meaning").asText(""),
-                    node.path("synonyms").asText(""),
-                    node.path("antonyms").asText(""),
-                    node.path("description").asText(""),
-                    ""  // jlptLevel은 reconcile 대상 아님
+                    "", "", ""
                 ));
             }
+
+            // 분해 결과가 원본과 동일하면 (쪼개지 못함) 빈 리스트 반환
+            if (results.size() == 1 && results.get(0).lemma().equals(word)) return List.of();
+            if (results.isEmpty()) return List.of();
+
+            log.info("Decomposed '{}' → {} parts: {}", word, results.size(),
+                results.stream().map(AnalysisResult.WordInfo::lemma).toList());
             return results;
         } catch (Exception e) {
-            log.error("Reconcile failed: {}", e.getMessage(), e);
-            throw new RuntimeException("OpenClaw reconcile failed", e);
+            log.warn("Failed to decompose '{}': {}", word, e.getMessage());
+            return List.of();
         }
-    }
-
-    private static String nullSafe(Object value) {
-        return value == null ? "" : value.toString();
     }
 
     private String extractJson(String content) {

@@ -60,7 +60,8 @@ public class CsvImportController {
                 String original = fields[0].trim();
                 String furigana = fields[1].trim();
                 String english = fields[2].trim();
-                String jlptLevel = fields[3].trim();
+                String jlptLevel = fields.length > 3 ? fields[3].trim() : "";
+                String source = jlptLevel.isEmpty() ? "JLPT" : "JLPT:" + jlptLevel;
 
                 if (original.isEmpty()) {
                     skipped++;
@@ -73,11 +74,15 @@ public class CsvImportController {
                     furigana,   // reading
                     english,    // meaning
                     "",         // pos
+                    "",         // posDetail
+                    "",         // posDesc
                     "",         // synonyms
                     "",         // antonyms
                     "",         // description
-                    jlptLevel,  // jlptLevel
-                    "JLPT"      // source
+                    source,     // source (JLPT:N5 등)
+                    0,          // starGrade
+                    "[]",       // conjugations
+                    ""          // dictEntryId
                 );
                 imported++;
             }

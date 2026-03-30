@@ -3,6 +3,7 @@ package com.blue.learnjp.controller;
 import com.blue.learnjp.domain.Source;
 import com.blue.learnjp.dto.AnalysisResult;
 import com.blue.learnjp.dto.ImportRequest;
+import com.blue.learnjp.dto.JakoLookupResult;
 import com.blue.learnjp.service.SentenceService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -33,17 +34,35 @@ public class SentenceController {
             return ResponseEntity.badRequest().build();
         }
 
-        // source enum 검증
-        String validatedSource = "";
-        if (source != null && !source.isBlank()) {
-            try {
-                validatedSource = Source.valueOf(source.toUpperCase()).name();
-            } catch (IllegalArgumentException e) {
-                return ResponseEntity.badRequest().build();
-            }
+        String validatedSource = Source.validate(source);
+        if (validatedSource == null) {
+            return ResponseEntity.badRequest().build();
         }
 
         AnalysisResult result = sentenceService.process(sentence, validatedSource);
+        return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/word")
+    public ResponseEntity<JakoLookupResult> registerWord(@RequestBody Map<String, String> request) {
+        return registerWordWithSource(request, null);
+    }
+
+    @PostMapping("/word/{source}")
+    public ResponseEntity<JakoLookupResult> registerWordWithSource(
+            @RequestBody Map<String, String> request,
+            @PathVariable(required = false) String source) {
+        String word = request.get("word");
+        if (word == null || word.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        String validatedSource = Source.validate(source);
+        if (validatedSource == null) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        JakoLookupResult result = sentenceService.registerWord(word, validatedSource);
         return ResponseEntity.ok(result);
     }
 

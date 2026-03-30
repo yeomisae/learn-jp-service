@@ -38,3 +38,6 @@ out/
 
 ### Environment ###
 .env
+
+### Claude docs ###
+claudedocs/
