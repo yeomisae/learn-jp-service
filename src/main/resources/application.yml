@@ -14,7 +14,18 @@ openclaw:
   api-key: ${OPENCLAW_API_KEY}
   model: ${OPENCLAW_MODEL:openclaw:jp-analyzer}
 
+naver:
+  jako:
+    base-url: https://ja.dict.naver.com/api3/jako/search
+    delay-ms: 200
+    timeout-ms: 5000
+    max-concurrent: 1
+
 google:
   sheets:
     credentials-path: ${GOOGLE_SHEETS_CREDENTIALS_PATH:}
     spreadsheet-id: ${GOOGLE_SHEETS_SPREADSHEET_ID:}
+    spreadsheets:
+      default: "1y-MrqvflPUWOrLL4wJ01fr-z3nRncd0RYjhhFhLwiWQ"
+      news: "1y7BvOIW68RowS3qn_kqgZGj9YHUFtdK_iwQUswx3zYQ"
+      jlpt: "1wSA49dHlz0zISAfs6XtpFvlwMH3MQ1D_YeEkgmMy-xs"

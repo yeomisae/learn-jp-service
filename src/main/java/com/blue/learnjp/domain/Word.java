@@ -21,7 +21,6 @@ public class Word {
     private String synonyms;
     private String antonyms;
     private String description;
-    private String jlptLevel;
     private int bookmark;
     private String image;
     private LocalDateTime createdAt;
@@ -48,7 +47,6 @@ public class Word {
     public String getSynonyms() { return synonyms; }
     public String getAntonyms() { return antonyms; }
     public String getDescription() { return description; }
-    public String getJlptLevel() { return jlptLevel; }
     public int getBookmark() { return bookmark; }
     public String getImage() { return image; }
     public LocalDateTime getCreatedAt() { return createdAt; }
@@ -60,7 +58,6 @@ public class Word {
     public void setSynonyms(String synonyms) { this.synonyms = synonyms; }
     public void setAntonyms(String antonyms) { this.antonyms = antonyms; }
     public void setDescription(String description) { this.description = description; }
-    public void setJlptLevel(String jlptLevel) { this.jlptLevel = jlptLevel; }
     public void setBookmark(int bookmark) { this.bookmark = bookmark; }
     public void setImage(String image) { this.image = image; }
 }

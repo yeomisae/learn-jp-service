@@ -42,14 +42,62 @@ public class GoogleSheetsService {
     }
 
     public int exportWords() {
-        String spreadsheetId = config.spreadsheetId();
+        Map<String, String> spreadsheets = config.spreadsheets();
+        if (spreadsheets == null || spreadsheets.isEmpty()) {
+            // 하위호환: 단일 spreadsheetId만 있는 경우
+            String spreadsheetId = config.spreadsheetId();
+            if (spreadsheetId == null || spreadsheetId.isEmpty()) return 0;
+            return exportAll(spreadsheetId);
+        }
 
+        int total = 0;
+
+        // JLPT 시트: source에 JLPT 포함된 단어
+        String jlptId = spreadsheets.get("jlpt");
+        if (jlptId != null && !jlptId.isEmpty()) {
+            Collection<Map<String, Object>> jlptWords = neo4jClient.query(
+                "MATCH (w:Word) WHERE w.source CONTAINS 'JLPT' RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
+            ).fetch().all();
+            writeToSheet(jlptId, jlptWords);
+            total += jlptWords.size();
+            log.info("Exported {} JLPT words", jlptWords.size());
+        }
+
+        // NEWS 시트: source에 NEWS 포함된 단어 (중복 허용)
+        String newsId = spreadsheets.get("news");
+        if (newsId != null && !newsId.isEmpty()) {
+            Collection<Map<String, Object>> newsWords = neo4jClient.query(
+                "MATCH (w:Word) WHERE w.source CONTAINS 'NEWS' RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
+            ).fetch().all();
+            writeToSheet(newsId, newsWords);
+            total += newsWords.size();
+            log.info("Exported {} NEWS words", newsWords.size());
+        }
+
+        // default 시트: JLPT도 NEWS도 아닌 나머지
+        String defaultId = spreadsheets.get("default");
+        if (defaultId != null && !defaultId.isEmpty()) {
+            Collection<Map<String, Object>> defaultWords = neo4jClient.query(
+                "MATCH (w:Word) WHERE NOT w.source CONTAINS 'JLPT' AND NOT w.source CONTAINS 'NEWS' RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
+            ).fetch().all();
+            writeToSheet(defaultId, defaultWords);
+            total += defaultWords.size();
+            log.info("Exported {} default words", defaultWords.size());
+        }
+
+        return total;
+    }
+
+    private int exportAll(String spreadsheetId) {
         Collection<Map<String, Object>> words = neo4jClient.query(
-            "MATCH (w:Word) RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.jlptLevel AS jlptLevel, w.bookmark AS bookmark, w.image AS image, w.source AS source, w.createdAt AS createdAt ORDER BY w.createdAt"
+            "MATCH (w:Word) RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
         ).fetch().all();
+        writeToSheet(spreadsheetId, words);
+        log.info("Exported {} words to single spreadsheet", words.size());
+        return words.size();
+    }
 
-        log.info("Exporting {} words to spreadsheet: {}", words.size(), spreadsheetId);
-
+    private void writeToSheet(String spreadsheetId, Collection<Map<String, Object>> words) {
         try {
             sheetsClient.spreadsheets().values()
                 .clear(spreadsheetId, SHEET_RANGE, new ClearValuesRequest())
@@ -62,11 +110,8 @@ public class GoogleSheetsService {
                 .update(spreadsheetId, SHEET_RANGE, body)
                 .setValueInputOption("RAW")
                 .execute();
-
-            log.info("Successfully exported {} words", words.size());
-            return words.size();
         } catch (Exception e) {
-            log.error("Failed to export words to Google Sheets", e);
+            log.error("Failed to export words to Google Sheets {}", spreadsheetId, e);
             throw new RuntimeException("Google Sheets export failed", e);
         }
     }
@@ -74,7 +119,7 @@ public class GoogleSheetsService {
     private List<List<Object>> buildSheetData(Collection<Map<String, Object>> words) {
         List<List<Object>> data = new ArrayList<>();
 
-        data.add(List.of("W", "M", "POS", "P", "S", "A", "D", "JLPT", "B", "I", "SRC", "C"));
+        data.add(List.of("W", "M", "POS", "P", "S", "A", "D", "B", "I", "C"));
 
         for (Map<String, Object> word : words) {
             String createdAt = "";
@@ -88,18 +133,20 @@ public class GoogleSheetsService {
             Object bookmarkVal = word.get("bookmark");
             String bookmark = bookmarkVal != null ? bookmarkVal.toString() : "0";
 
+            // POS: posDesc 우선, 없으면 pos 원본
+            String posDesc = nullSafe(word.get("posDesc"));
+            String posDisplay = posDesc.isEmpty() ? nullSafe(word.get("pos")) : posDesc;
+
             data.add(List.of(
                 nullSafe(word.get("lemma")),
                 nullSafe(word.get("meaning")),
-                nullSafe(word.get("pos")),
+                posDisplay,
                 nullSafe(word.get("reading")),
                 nullSafe(word.get("synonyms")),
                 nullSafe(word.get("antonyms")),
                 nullSafe(word.get("description")),
-                nullSafe(word.get("jlptLevel")),
                 bookmark,
                 nullSafe(word.get("image")),
-                nullSafe(word.get("source")),
                 createdAt
             ));
         }
