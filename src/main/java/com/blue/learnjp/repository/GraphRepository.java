@@ -170,14 +170,17 @@ public class GraphRepository {
                               String posDetail, String posDesc, String synonyms, String antonyms,
                               String description, String source, int starGrade, String conjugations,
                               String dictEntryId) {
-        // source는 누적이므로 기존값과 merge
-        String mergedSource = source;
-        if (source != null && !source.isEmpty()) {
-            var row = neo4jClient.query("MATCH (w:Word {lemma: $lemma}) RETURN w.source AS oldSource")
-                .bind(lemma).to("lemma")
-                .fetch().first().orElse(null);
-            if (row != null) {
-                mergedSource = mergeValues((String) row.get("oldSource"), source);
+        // source가 비어 있으면 기존값 유지, 값이 있으면 기존값과 merge
+        String mergedSource = source != null ? source : "";
+        var row = neo4jClient.query("MATCH (w:Word {lemma: $lemma}) RETURN w.source AS oldSource")
+            .bind(lemma).to("lemma")
+            .fetch().first().orElse(null);
+        if (row != null) {
+            String oldSource = (String) row.get("oldSource");
+            if (source == null || source.isEmpty()) {
+                mergedSource = oldSource != null ? oldSource : "";
+            } else {
+                mergedSource = mergeValues(oldSource, source);
             }
         }
 
