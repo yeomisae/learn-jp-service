@@ -61,8 +61,4 @@ public class ExampleQueueService {
             graphRepository.updateExampleQueueStatus(textJa, "FAILED");
         }
     }
-
-    public long getPendingCount() {
-        return graphRepository.countPendingExamples();
-    }
 }

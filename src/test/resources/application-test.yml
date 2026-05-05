@@ -1,0 +1,13 @@
+app:
+  scheduling:
+    enabled: false
+
+spring:
+  neo4j:
+    uri: bolt://localhost:7687
+    authentication:
+      username: neo4j
+      password: test-password
+
+openclaw:
+  api-key: test-api-key

@@ -163,33 +163,10 @@ public class GraphRepository {
     }
 
     /**
-     * Word 노드의 품질 필드를 업데이트한다.
-     */
-    public void updateWordEnrichment(String lemma, String meaning, String pos,
-                                     String synonyms, String antonyms, String description) {
-        neo4jClient.query("""
-            MATCH (w:Word {lemma: $lemma})
-            SET w.meaning = $meaning,
-                w.pos = $pos,
-                w.synonyms = $synonyms,
-                w.antonyms = $antonyms,
-                w.description = $description,
-                w.updatedAt = datetime()
-            """)
-            .bind(lemma).to("lemma")
-            .bind(meaning).to("meaning")
-            .bind(pos).to("pos")
-            .bind(synonyms).to("synonyms")
-            .bind(antonyms).to("antonyms")
-            .bind(description).to("description")
-            .run();
-    }
-
-    /**
      * 기존 Word 노드의 누적 필드를 reconcile된 최종값으로 덮어쓴다 (누적 아님).
      * reconcile 후 의미적 중복이 제거된 값을 직접 SET한다.
      */
-    public void setWordFields(String lemma, String surface, String meaning, String pos,
+    public void setWordFields(String lemma, String surface, String reading, String meaning, String pos,
                               String posDetail, String posDesc, String synonyms, String antonyms,
                               String description, String source, int starGrade, String conjugations,
                               String dictEntryId) {
@@ -207,6 +184,7 @@ public class GraphRepository {
         neo4jClient.query("""
             MATCH (w:Word {lemma: $lemma})
             SET w.surface = $surface,
+                w.reading = $reading,
                 w.meaning = $meaning,
                 w.pos = $pos,
                 w.posDetail = $posDetail,
@@ -222,6 +200,7 @@ public class GraphRepository {
             """)
             .bind(lemma).to("lemma")
             .bind(surface).to("surface")
+            .bind(reading).to("reading")
             .bind(meaning).to("meaning")
             .bind(pos).to("pos")
             .bind(posDetail != null ? posDetail : "").to("posDetail")
@@ -385,7 +364,7 @@ public class GraphRepository {
         // 존재 여부에 따라 덮어쓰기 or 생성
         boolean exists = !findWordsByLemmas(List.of(resolvedLemma)).isEmpty();
         if (exists) {
-            setWordFields(resolvedLemma, surface, meaning, pos, posDetail, posDesc,
+            setWordFields(resolvedLemma, surface, reading, meaning, pos, posDetail, posDesc,
                           synonyms, antonyms, description, source, starGrade, conjugations, dictEntryId);
         } else {
             mergeWord(surface, resolvedLemma, reading, meaning, pos, posDetail, posDesc,

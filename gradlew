@@ -116,6 +116,25 @@ esac
 
 CLASSPATH="\\\"\\\""
 
+# On macOS, prefer a local JDK 21 automatically when JAVA_HOME is unset.
+if [ -z "$JAVA_HOME" ] && "$darwin" ; then
+    if [ -x /usr/libexec/java_home ] ; then
+        JAVA_HOME=$( /usr/libexec/java_home -v 21 2>/dev/null ) || true
+    fi
+
+    if [ -z "$JAVA_HOME" ] ; then
+        for candidate in \
+            /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
+            /usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+        do
+            if [ -x "$candidate/bin/java" ] ; then
+                JAVA_HOME=$candidate
+                break
+            fi
+        done
+    fi
+fi
+
 
 # Determine the Java command to use to start the JVM.
 if [ -n "$JAVA_HOME" ] ; then
