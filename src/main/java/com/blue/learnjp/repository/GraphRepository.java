@@ -241,6 +241,45 @@ public class GraphRepository {
     }
 
     /**
+     * 퀴즈용 단어 세트를 조회한다.
+     * source는 "JLPT:N5" 같은 exact token 기준으로 필터링한다.
+     */
+    public List<Map<String, Object>> findQuizWordsBySources(List<String> sources, List<String> excludeLemmas,
+                                                            int limit, boolean requireReading,
+                                                            boolean requireMeaning, boolean requireDictEntry) {
+        return neo4jClient.query("""
+            MATCH (w:Word)
+            WITH w, [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources
+            WHERE ANY(source IN $sources WHERE source IN wordSources)
+              AND (size($excludeLemmas) = 0 OR NOT w.lemma IN $excludeLemmas)
+              AND (NOT $requireReading OR trim(coalesce(w.reading, '')) <> '')
+              AND (NOT $requireMeaning OR trim(coalesce(w.meaning, '')) <> '')
+              AND (NOT $requireDictEntry OR (
+                    trim(coalesce(w.dictEntryId, '')) <> ''
+                    AND coalesce(w.dictEntryId, '') <> 'NOT_FOUND'
+                  ))
+            RETURN w.lemma AS lemma,
+                   w.reading AS reading,
+                   w.meaning AS meaning,
+                   w.pos AS pos,
+                   w.posDetail AS posDetail,
+                   w.posDesc AS posDesc,
+                   w.source AS source,
+                   w.starGrade AS starGrade,
+                   w.dictEntryId AS dictEntryId
+            ORDER BY rand()
+            LIMIT $limit
+            """)
+            .bind(sources).to("sources")
+            .bind(excludeLemmas).to("excludeLemmas")
+            .bind(requireReading).to("requireReading")
+            .bind(requireMeaning).to("requireMeaning")
+            .bind(requireDictEntry).to("requireDictEntry")
+            .bind(limit).to("limit")
+            .fetch().all().stream().toList();
+    }
+
+    /**
      * 문장이 이미 등록되어 있는지 확인한다.
      */
     public boolean sentenceExists(String text) {
