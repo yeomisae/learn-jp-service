@@ -21,7 +21,7 @@ import java.util.*;
  *   <li>synonyms    — 일본어 유의어 (쉼표 구분)</li>
  *   <li>antonyms    — 일본어 반의어 (쉼표 구분)</li>
  *   <li>description — 한국어 설명 (한 줄)</li>
- *   <li>bookmark    — 북마크 여부 (0 또는 1)</li>
+ *   <li>bookmark    — 학습 상태 점수 (기본 -3, 음수: 헷갈림, 0: 미표시, 양수: 익숙함)</li>
  *   <li>image       — 이미지 URL</li>
  *   <li>source      — 등록 출처 (쉼표 구분 누적: JLPT, NEWS, MANUAL, ANIME 등)</li>
  *   <li>starGrade   — 빈도 기반 난이도 (0~2+, 네이버 사전 priority)</li>
@@ -33,6 +33,8 @@ import java.util.*;
  */
 @Repository
 public class GraphRepository {
+
+    static final int INITIAL_BOOKMARK = -3;
 
     private final Neo4jClient neo4jClient;
 
@@ -64,7 +66,7 @@ public class GraphRepository {
                           w.starGrade = $starGrade,
                           w.conjugations = $conjugations,
                           w.dictEntryId = $dictEntryId,
-                          w.bookmark = 0,
+                          w.bookmark = $initialBookmark,
                           w.image = '',
                           w.createdAt = datetime()
             RETURN w.surface AS oldSurface, w.meaning AS oldMeaning,
@@ -85,6 +87,7 @@ public class GraphRepository {
             .bind(starGrade).to("starGrade")
             .bind(conjugations != null ? conjugations : "[]").to("conjugations")
             .bind(dictEntryId != null ? dictEntryId : "").to("dictEntryId")
+            .bind(INITIAL_BOOKMARK).to("initialBookmark")
             .fetch().first()
             .ifPresent(row -> {
                 String mergedSurface = mergeValues((String) row.get("oldSurface"), surface);
@@ -249,7 +252,9 @@ public class GraphRepository {
                                                             boolean requireMeaning, boolean requireDictEntry) {
         return neo4jClient.query("""
             MATCH (w:Word)
-            WITH w, [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources
+            WITH w,
+                 [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources,
+                 coalesce(w.bookmark, $initialBookmark) AS bookmarkValue
             WHERE ANY(source IN $sources WHERE source IN wordSources)
               AND (size($excludeLemmas) = 0 OR NOT w.lemma IN $excludeLemmas)
               AND (NOT $requireReading OR trim(coalesce(w.reading, '')) <> '')
@@ -258,6 +263,17 @@ public class GraphRepository {
                     trim(coalesce(w.dictEntryId, '')) <> ''
                     AND coalesce(w.dictEntryId, '') <> 'NOT_FOUND'
                   ))
+            WITH w, bookmarkValue,
+                 CASE
+                   WHEN bookmarkValue <= -3 THEN 6.0
+                   WHEN bookmarkValue = -2 THEN 5.0
+                   WHEN bookmarkValue = -1 THEN 4.0
+                   WHEN bookmarkValue = 0 THEN 3.0
+                   WHEN bookmarkValue = 1 THEN 2.0
+                   ELSE 1.0
+                 END AS weight
+            WITH w, weight, rand() AS r
+            WITH w, -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END) / weight AS sampleKey
             RETURN w.lemma AS lemma,
                    w.reading AS reading,
                    w.meaning AS meaning,
@@ -267,7 +283,7 @@ public class GraphRepository {
                    w.source AS source,
                    w.starGrade AS starGrade,
                    w.dictEntryId AS dictEntryId
-            ORDER BY rand()
+            ORDER BY sampleKey
             LIMIT $limit
             """)
             .bind(sources).to("sources")
@@ -275,8 +291,40 @@ public class GraphRepository {
             .bind(requireReading).to("requireReading")
             .bind(requireMeaning).to("requireMeaning")
             .bind(requireDictEntry).to("requireDictEntry")
+            .bind(INITIAL_BOOKMARK).to("initialBookmark")
             .bind(limit).to("limit")
             .fetch().all().stream().toList();
+    }
+
+    /**
+     * bookmark 점수를 bulk 증감한다.
+     * delta는 -1 또는 1을 기대하지만, 서비스에서 합산된 임의 정수도 허용한다.
+     */
+    public int adjustWordBookmarks(Map<String, Integer> bookmarkDeltas) {
+        if (bookmarkDeltas == null || bookmarkDeltas.isEmpty()) {
+            return 0;
+        }
+
+        List<Map<String, Object>> updates = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : bookmarkDeltas.entrySet()) {
+            updates.add(Map.of(
+                "lemma", entry.getKey(),
+                "delta", entry.getValue()
+            ));
+        }
+
+        return neo4jClient.query("""
+            UNWIND $updates AS update
+            MATCH (w:Word {lemma: update.lemma})
+            SET w.bookmark = coalesce(w.bookmark, $initialBookmark) + update.delta,
+                w.updatedAt = datetime()
+            RETURN count(w) AS updatedCount
+            """)
+            .bind(updates).to("updates")
+            .bind(INITIAL_BOOKMARK).to("initialBookmark")
+            .fetch().first()
+            .map(row -> ((Number) row.get("updatedCount")).intValue())
+            .orElse(0);
     }
 
     /**

@@ -131,7 +131,7 @@ public class GoogleSheetsService {
             }
 
             Object bookmarkVal = word.get("bookmark");
-            String bookmark = bookmarkVal != null ? bookmarkVal.toString() : "0";
+            String bookmark = normalizeBookmarkForSheet(bookmarkVal);
 
             // POS: posDesc 우선, 없으면 pos 원본
             String posDesc = nullSafe(word.get("posDesc"));
@@ -152,6 +152,22 @@ public class GoogleSheetsService {
         }
 
         return data;
+    }
+
+    static String normalizeBookmarkForSheet(Object bookmarkVal) {
+        if (bookmarkVal instanceof Number number) {
+            return Integer.compare(number.intValue(), 0) < 0 ? "-1"
+                : Integer.compare(number.intValue(), 0) > 0 ? "1" : "0";
+        }
+        if (bookmarkVal instanceof String text && !text.isBlank()) {
+            try {
+                int value = Integer.parseInt(text.trim());
+                return value < 0 ? "-1" : value > 0 ? "1" : "0";
+            } catch (NumberFormatException ignored) {
+                return "0";
+            }
+        }
+        return "0";
     }
 
     private static String nullSafe(Object value) {
