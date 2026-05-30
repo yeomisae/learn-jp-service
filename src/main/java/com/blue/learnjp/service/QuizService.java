@@ -3,6 +3,8 @@ package com.blue.learnjp.service;
 import com.blue.learnjp.dto.JakoLookupResult;
 import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
+import com.blue.learnjp.dto.QuizTurnRequest;
+import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
@@ -119,6 +121,23 @@ public class QuizService {
         );
     }
 
+    public QuizTurnResponse processTurn(QuizTurnRequest request) {
+        QuizWordSetRequest wordSetRequest = toWordSetRequest(request);
+        normalize(wordSetRequest);
+
+        QuizBookmarkUpdateResponse bookmark = updateBookmarks(toBookmarkUpdateRequest(request));
+        QuizWordSetResponse wordSet = createWordSet(wordSetRequest);
+        List<String> targetDisplayLines = buildTargetDisplayLines(bookmark);
+        return new QuizTurnResponse(
+            bookmark,
+            targetDisplayLines,
+            "출제단어:\n\n" + String.join("\n", targetDisplayLines),
+            "———",
+            wordSet,
+            "ok"
+        );
+    }
+
     private List<String> withAdditionalExcludes(List<String> base, List<String> additional) {
         LinkedHashSet<String> excludes = new LinkedHashSet<>();
         if (base != null) {
@@ -156,6 +175,31 @@ public class QuizService {
             results.add(new QuizBookmarkUpdateResponse.TargetResult(lemma, result, bookmark));
         }
         return List.copyOf(results);
+    }
+
+    private List<String> buildTargetDisplayLines(QuizBookmarkUpdateResponse bookmark) {
+        if (bookmark == null || bookmark.targetResults() == null || bookmark.targetResults().isEmpty()) {
+            return List.of("• 기록 없음");
+        }
+
+        List<String> lines = new ArrayList<>();
+        for (QuizBookmarkUpdateResponse.TargetResult result : bookmark.targetResults()) {
+            if (result.lemma() == null || result.lemma().isBlank()) {
+                continue;
+            }
+            lines.add("• " + result.lemma() + " " + resultMark(result.result()) + " ("
+                + (result.bookmark() != null ? result.bookmark() : "-") + ")");
+        }
+        return lines.isEmpty() ? List.of("• 기록 없음") : List.copyOf(lines);
+    }
+
+    private String resultMark(String result) {
+        return switch (result != null ? result : "") {
+            case "correct" -> "✅";
+            case "wrong" -> "❌";
+            case "missing" -> "?";
+            default -> "➖";
+        };
     }
 
     public QuizBookmarkUpdateResponse updateBookmarks(QuizBookmarkUpdateRequest request) {
@@ -203,6 +247,32 @@ public class QuizService {
             stringValue(row.get("source")),
             intValue(row.get("starGrade")),
             stringValue(row.get("dictEntryId"))
+        );
+    }
+
+    private QuizWordSetRequest toWordSetRequest(QuizTurnRequest request) {
+        if (request == null) {
+            return null;
+        }
+        return new QuizWordSetRequest(
+            request.strategy(),
+            request.levels(),
+            request.count(),
+            request.excludeLemmas(),
+            request.requireReading(),
+            request.requireMeaning(),
+            request.requireDictEntry()
+        );
+    }
+
+    private QuizBookmarkUpdateRequest toBookmarkUpdateRequest(QuizTurnRequest request) {
+        if (request == null) {
+            return null;
+        }
+        return new QuizBookmarkUpdateRequest(
+            request.targetLemmas(),
+            request.wrongLemmas(),
+            request.correctLemmas()
         );
     }
 

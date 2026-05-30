@@ -3,6 +3,8 @@ package com.blue.learnjp.service;
 import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
 import com.blue.learnjp.dto.JakoLookupResult;
+import com.blue.learnjp.dto.QuizTurnRequest;
+import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
@@ -379,6 +381,72 @@ class QuizServiceTests {
         assertThat(response.targetResults()).containsExactly(
             new QuizBookmarkUpdateResponse.TargetResult("薬局", "missing", null)
         );
+    }
+
+    @Test
+    void processTurnUpdatesBookmarksAndCreatesNextWordSet() {
+        GraphRepository graphRepository = mock(GraphRepository.class);
+        NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
+        when(graphRepository.findWordsByLemmas(List.of("食べる")))
+            .thenReturn(Map.of("食べる", Map.of("lemma", "食べる")))
+            .thenReturn(Map.of("食べる", Map.of("lemma", "食べる", "bookmark", -3)));
+        when(graphRepository.adjustWordBookmarks(Map.of("食べる", 1))).thenReturn(1);
+        when(graphRepository.findQuizTargetBySources(
+            List.of("JLPT:N5"),
+            List.of("食べる"),
+            true,
+            true,
+            true
+        )).thenReturn(Optional.of(Map.of(
+            "lemma", "水",
+            "reading", "みず",
+            "meaning", "물",
+            "pos", "명사",
+            "posDetail", "名詞",
+            "posDesc", "명사",
+            "source", "JLPT:N5",
+            "starGrade", 1,
+            "dictEntryId", "dict-water"
+        )));
+        when(graphRepository.findQuizCandidateWordsByEdge(
+            eq("水"),
+            eq(List.of("JLPT:N5")),
+            eq(List.of("食べる", "水")),
+            eq(1),
+            eq(true),
+            eq(true),
+            eq(true)
+        )).thenReturn(List.of());
+        when(graphRepository.findQuizWordsBySources(
+            eq(List.of("JLPT:N5")),
+            eq(List.of("食べる", "水")),
+            eq(1),
+            eq(true),
+            eq(true),
+            eq(true)
+        )).thenReturn(List.of());
+
+        QuizService quizService = new QuizService(graphRepository, jakoService);
+
+        QuizTurnResponse response = quizService.processTurn(new QuizTurnRequest(
+            "random_jlpt",
+            List.of("N5"),
+            2,
+            List.of("食べる"),
+            true,
+            true,
+            true,
+            List.of("食べる"),
+            List.of(),
+            List.of("食べる")
+        ));
+
+        assertThat(response.bookmark().updatedCount()).isEqualTo(1);
+        assertThat(response.targetDisplayLines()).containsExactly("• 食べる ✅ (-3)");
+        assertThat(response.mustCopyTargetBlock()).isEqualTo("출제단어:\n\n• 食べる ✅ (-3)");
+        assertThat(response.mustCopySeparator()).isEqualTo("———");
+        assertThat(response.wordSet().requiredWord().lemma()).isEqualTo("水");
+        assertThat(response.status()).isEqualTo("ok");
     }
 
 }
