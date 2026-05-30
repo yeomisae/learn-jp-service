@@ -38,22 +38,73 @@ public class QuizService {
     public QuizWordSetResponse createWordSet(QuizWordSetRequest request) {
         NormalizedRequest normalized = normalize(request);
 
-        List<Map<String, Object>> rows = graphRepository.findQuizWordsBySources(
+        Map<String, Object> targetRow = graphRepository.findQuizTargetBySources(
             normalized.sources(),
             normalized.excludeLemmas(),
-            normalized.count(),
+            normalized.requireReading(),
+            normalized.requireMeaning(),
+            normalized.requireDictEntry()
+        ).orElse(null);
+
+        if (targetRow == null) {
+            return new QuizWordSetResponse(
+                normalized.strategy(),
+                normalized.count(),
+                0,
+                null,
+                List.of(),
+                ALLOW_DROP_CANDIDATES,
+                MAX_CANDIDATE_WORDS_TO_USE,
+                MAX_EXTRA_CONTENT_WORDS,
+                List.of()
+            );
+        }
+
+        QuizWordSetResponse.QuizWord requiredWord = toQuizWord(targetRow);
+        int candidateLimit = Math.max(0, normalized.count() - 1);
+        List<String> candidateExcludes = withAdditionalExcludes(
+            normalized.excludeLemmas(),
+            List.of(requiredWord.lemma())
+        );
+
+        List<Map<String, Object>> candidateRows = graphRepository.findQuizCandidateWordsByEdge(
+            requiredWord.lemma(),
+            normalized.sources(),
+            candidateExcludes,
+            candidateLimit,
             normalized.requireReading(),
             normalized.requireMeaning(),
             normalized.requireDictEntry()
         );
 
-        List<QuizWordSetResponse.QuizWord> words = rows.stream()
+        List<QuizWordSetResponse.QuizWord> candidateWords = candidateRows.stream()
             .map(this::toQuizWord)
             .toList();
-        QuizWordSetResponse.QuizWord requiredWord = selectRequiredWord(rows);
-        List<QuizWordSetResponse.QuizWord> candidateWords = words.stream()
-            .filter(word -> requiredWord == null || !word.equals(requiredWord))
-            .toList();
+
+        if (candidateWords.size() < candidateLimit) {
+            List<String> fallbackExcludes = withAdditionalExcludes(
+                candidateExcludes,
+                candidateWords.stream().map(QuizWordSetResponse.QuizWord::lemma).toList()
+            );
+            List<Map<String, Object>> fallbackRows = graphRepository.findQuizWordsBySources(
+                normalized.sources(),
+                fallbackExcludes,
+                candidateLimit - candidateWords.size(),
+                normalized.requireReading(),
+                normalized.requireMeaning(),
+                normalized.requireDictEntry()
+            );
+            List<QuizWordSetResponse.QuizWord> mergedCandidates = new ArrayList<>(candidateWords);
+            fallbackRows.stream()
+                .map(this::toQuizWord)
+                .filter(word -> !word.lemma().equals(requiredWord.lemma()))
+                .forEach(mergedCandidates::add);
+            candidateWords = List.copyOf(mergedCandidates);
+        }
+
+        List<QuizWordSetResponse.QuizWord> words = new ArrayList<>();
+        words.add(requiredWord);
+        words.addAll(candidateWords);
 
         return new QuizWordSetResponse(
             normalized.strategy(),
@@ -66,6 +117,45 @@ public class QuizService {
             MAX_EXTRA_CONTENT_WORDS,
             words
         );
+    }
+
+    private List<String> withAdditionalExcludes(List<String> base, List<String> additional) {
+        LinkedHashSet<String> excludes = new LinkedHashSet<>();
+        if (base != null) {
+            excludes.addAll(base);
+        }
+        if (additional != null) {
+            additional.stream()
+                .filter(lemma -> lemma != null && !lemma.isBlank())
+                .map(String::trim)
+                .forEach(excludes::add);
+        }
+        return List.copyOf(excludes);
+    }
+
+    private List<QuizBookmarkUpdateResponse.TargetResult> buildTargetResults(
+        List<String> targetLemmas,
+        Map<String, Integer> appliedDeltas,
+        Map<String, Map<String, Object>> currentWords,
+        List<String> missingLemmas
+    ) {
+        if (targetLemmas == null || targetLemmas.isEmpty()) {
+            return List.of();
+        }
+
+        LinkedHashSet<String> missing = new LinkedHashSet<>(missingLemmas != null ? missingLemmas : List.of());
+        List<QuizBookmarkUpdateResponse.TargetResult> results = new ArrayList<>();
+        for (String lemma : targetLemmas) {
+            Integer delta = appliedDeltas.get(lemma);
+            String result = delta == null ? "unchanged" : delta < 0 ? "wrong" : "correct";
+            Map<String, Object> current = currentWords.get(lemma);
+            Integer bookmark = current != null ? intValueOrNull(current.get("bookmark")) : null;
+            if (missing.contains(lemma)) {
+                result = "missing";
+            }
+            results.add(new QuizBookmarkUpdateResponse.TargetResult(lemma, result, bookmark));
+        }
+        return List.copyOf(results);
     }
 
     public QuizBookmarkUpdateResponse updateBookmarks(QuizBookmarkUpdateRequest request) {
@@ -85,12 +175,19 @@ public class QuizService {
         }
 
         int updatedCount = graphRepository.adjustWordBookmarks(updatableDeltas);
+        Map<String, Map<String, Object>> currentWords = resolution.targetLemmas().isEmpty()
+            ? Map.of()
+            : graphRepository.findWordsByLemmas(resolution.targetLemmas());
+        if (currentWords == null) {
+            currentWords = Map.of();
+        }
         return new QuizBookmarkUpdateResponse(
             updatedCount,
             Map.copyOf(updatableDeltas),
             resolution.resolvedMappings(),
             resolution.ignoredLemmas(),
             List.copyOf(missingLemmas),
+            buildTargetResults(resolution.targetLemmas(), updatableDeltas, currentWords, missingLemmas),
             "ok"
         );
     }
@@ -212,10 +309,11 @@ public class QuizService {
 
     private BookmarkResolution normalizeBookmarkDeltas(QuizBookmarkUpdateRequest request) {
         if (request == null) {
-            return new BookmarkResolution(Map.of(), Map.of(), List.of());
+            return new BookmarkResolution(List.of(), Map.of(), Map.of(), List.of());
         }
 
-        LinkedHashSet<String> targetSet = new LinkedHashSet<>(normalizeLemmas(request.targetLemmas()));
+        List<String> targetLemmas = normalizeLemmas(request.targetLemmas());
+        LinkedHashSet<String> targetSet = new LinkedHashSet<>(targetLemmas);
         LinkedHashMap<String, Integer> deltas = new LinkedHashMap<>();
         LinkedHashMap<String, String> resolvedMappings = new LinkedHashMap<>();
         LinkedHashSet<String> ignoredLemmas = new LinkedHashSet<>();
@@ -224,6 +322,7 @@ public class QuizService {
         applyDelta(deltas, request.correctLemmas(), 1, targetSet, resolvedMappings, ignoredLemmas);
         deltas.entrySet().removeIf(entry -> entry.getValue() == 0);
         return new BookmarkResolution(
+            targetLemmas,
             Collections.unmodifiableMap(new LinkedHashMap<>(deltas)),
             Collections.unmodifiableMap(new LinkedHashMap<>(resolvedMappings)),
             List.copyOf(ignoredLemmas)
@@ -314,6 +413,16 @@ public class QuizService {
         return 0;
     }
 
+    private Integer intValueOrNull(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Integer.parseInt(text);
+        }
+        return null;
+    }
+
     private record NormalizedRequest(
         String strategy,
         List<String> sources,
@@ -325,6 +434,7 @@ public class QuizService {
     ) {}
 
     private record BookmarkResolution(
+        List<String> targetLemmas,
         Map<String, Integer> appliedDeltas,
         Map<String, String> resolvedMappings,
         List<String> ignoredLemmas

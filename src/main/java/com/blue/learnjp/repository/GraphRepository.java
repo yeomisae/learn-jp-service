@@ -279,9 +279,11 @@ public class GraphRepository {
             MATCH (w:Word) WHERE w.lemma IN $lemmas
             RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos,
                    w.synonyms AS synonyms, w.antonyms AS antonyms,
-                   w.description AS description, w.surface AS surface
+                   w.description AS description, w.surface AS surface,
+                   coalesce(w.bookmark, $initialBookmark) AS bookmark
             """)
             .bind(lemmas).to("lemmas")
+            .bind(INITIAL_BOOKMARK).to("initialBookmark")
             .fetch().all();
 
         Map<String, Map<String, Object>> result = new HashMap<>();
@@ -306,6 +308,9 @@ public class GraphRepository {
                  coalesce(w.bookmark, $initialBookmark) AS bookmarkValue
             WHERE ANY(source IN $sources WHERE source IN wordSources)
               AND (size($excludeLemmas) = 0 OR NOT w.lemma IN $excludeLemmas)
+              AND NOT w.lemma CONTAINS '～'
+              AND NOT w.lemma STARTS WITH 'n-'
+              AND NOT w.lemma =~ '.*[0-9０-９].*'
               AND (NOT $requireReading OR trim(coalesce(w.reading, '')) <> '')
               AND (NOT $requireMeaning OR trim(coalesce(w.meaning, '')) <> '')
               AND (NOT $requireDictEntry OR (
@@ -342,6 +347,124 @@ public class GraphRepository {
             .bind(requireDictEntry).to("requireDictEntry")
             .bind(INITIAL_BOOKMARK).to("initialBookmark")
             .bind(limit).to("limit")
+            .fetch().all().stream().toList();
+    }
+
+    /**
+     * Quiz target은 edge 유무와 무관하게 JLPT/bookmark 조건만으로 뽑는다.
+     */
+    public Optional<Map<String, Object>> findQuizTargetBySources(List<String> sources, List<String> excludeLemmas,
+                                                                 boolean requireReading, boolean requireMeaning,
+                                                                 boolean requireDictEntry) {
+        return neo4jClient.query("""
+            MATCH (w:Word)
+            WITH w,
+                 [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources,
+                 coalesce(w.bookmark, $initialBookmark) AS bookmarkValue
+            WHERE ANY(source IN $sources WHERE source IN wordSources)
+              AND (size($excludeLemmas) = 0 OR NOT w.lemma IN $excludeLemmas)
+              AND NOT w.lemma CONTAINS '～'
+              AND NOT w.lemma STARTS WITH 'n-'
+              AND NOT w.lemma =~ '.*[0-9０-９].*'
+              AND (NOT $requireReading OR trim(coalesce(w.reading, '')) <> '')
+              AND (NOT $requireMeaning OR trim(coalesce(w.meaning, '')) <> '')
+              AND (NOT $requireDictEntry OR (
+                    trim(coalesce(w.dictEntryId, '')) <> ''
+                    AND coalesce(w.dictEntryId, '') <> 'NOT_FOUND'
+                  ))
+            WITH w, bookmarkValue,
+                 CASE
+                   WHEN bookmarkValue <= -3 THEN 6.0
+                   WHEN bookmarkValue = -2 THEN 5.0
+                   WHEN bookmarkValue = -1 THEN 4.0
+                   WHEN bookmarkValue = 0 THEN 3.0
+                   WHEN bookmarkValue = 1 THEN 2.0
+                   ELSE 1.0
+                 END AS weight
+            WITH w, weight, rand() AS r
+            WITH w, -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END) / weight AS sampleKey
+            RETURN w.lemma AS lemma,
+                   w.reading AS reading,
+                   w.meaning AS meaning,
+                   w.pos AS pos,
+                   w.posDetail AS posDetail,
+                   w.posDesc AS posDesc,
+                   w.source AS source,
+                   w.starGrade AS starGrade,
+                   w.dictEntryId AS dictEntryId
+            ORDER BY sampleKey
+            LIMIT 1
+            """)
+            .bind(sources).to("sources")
+            .bind(excludeLemmas).to("excludeLemmas")
+            .bind(requireReading).to("requireReading")
+            .bind(requireMeaning).to("requireMeaning")
+            .bind(requireDictEntry).to("requireDictEntry")
+            .bind(INITIAL_BOOKMARK).to("initialBookmark")
+            .fetch().first();
+    }
+
+    /**
+     * Target에서 CO_OCCURS depth 1..2 이웃을 후보로 뽑는다.
+     * depth 1과 pathCount에 가중치를 주되 weighted random으로 다양성을 유지한다.
+     */
+    public List<Map<String, Object>> findQuizCandidateWordsByEdge(String targetLemma, List<String> sources,
+                                                                  List<String> excludeLemmas, int limit,
+                                                                  boolean requireReading, boolean requireMeaning,
+                                                                  boolean requireDictEntry) {
+        if (targetLemma == null || targetLemma.isBlank() || limit <= 0) {
+            return List.of();
+        }
+
+        return neo4jClient.query("""
+            MATCH (target:Word {lemma: $targetLemma})
+            MATCH path = (target)-[:CO_OCCURS*1..2]-(candidate:Word)
+            WITH candidate,
+                 min(length(path)) AS distance,
+                 count(path) AS pathCount,
+                 [src IN split(coalesce(candidate.source, ''), ',') | trim(src)] AS wordSources
+            WHERE candidate.lemma <> $targetLemma
+              AND ANY(source IN $sources WHERE source IN wordSources)
+              AND (size($excludeLemmas) = 0 OR NOT candidate.lemma IN $excludeLemmas)
+              AND NOT candidate.lemma CONTAINS '～'
+              AND NOT candidate.lemma STARTS WITH 'n-'
+              AND NOT candidate.lemma =~ '.*[0-9０-９].*'
+              AND (NOT $requireReading OR trim(coalesce(candidate.reading, '')) <> '')
+              AND (NOT $requireMeaning OR trim(coalesce(candidate.meaning, '')) <> '')
+              AND (NOT $requireDictEntry OR (
+                    trim(coalesce(candidate.dictEntryId, '')) <> ''
+                    AND coalesce(candidate.dictEntryId, '') <> 'NOT_FOUND'
+                  ))
+            WITH candidate,
+                 distance,
+                 pathCount,
+                 CASE distance
+                   WHEN 1 THEN 1.0
+                   ELSE 0.35
+                 END AS distanceWeight,
+                 rand() AS r
+            WITH candidate,
+                 -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END)
+                   / (distanceWeight * log(1 + pathCount)) AS sampleKey
+            RETURN candidate.lemma AS lemma,
+                   candidate.reading AS reading,
+                   candidate.meaning AS meaning,
+                   candidate.pos AS pos,
+                   candidate.posDetail AS posDetail,
+                   candidate.posDesc AS posDesc,
+                   candidate.source AS source,
+                   candidate.starGrade AS starGrade,
+                   candidate.dictEntryId AS dictEntryId
+            ORDER BY sampleKey
+            LIMIT $limit
+            """)
+            .bind(targetLemma).to("targetLemma")
+            .bind(sources).to("sources")
+            .bind(excludeLemmas).to("excludeLemmas")
+            .bind(limit).to("limit")
+            .bind(requireReading).to("requireReading")
+            .bind(requireMeaning).to("requireMeaning")
+            .bind(requireDictEntry).to("requireDictEntry")
             .fetch().all().stream().toList();
     }
 

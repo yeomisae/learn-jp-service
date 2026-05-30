@@ -220,4 +220,70 @@ class GraphRepositoryTests {
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("WHEN bookmarkValue <= -3 THEN 6.0"));
         verify(query).bind(GraphRepository.INITIAL_BOOKMARK);
     }
+
+    @Test
+    void findQuizTargetBySourcesIgnoresEdgesAndFiltersBadLemmas() {
+        Neo4jClient neo4jClient = mock(Neo4jClient.class);
+        @SuppressWarnings("unchecked")
+        Neo4jClient.RecordFetchSpec<Map<String, Object>> fetch = mock(Neo4jClient.RecordFetchSpec.class);
+        Neo4jClient.UnboundRunnableSpec query = mock(Neo4jClient.UnboundRunnableSpec.class);
+        @SuppressWarnings("unchecked")
+        Neo4jClient.OngoingBindSpec<Object, Neo4jClient.RunnableSpec> bind = mock(Neo4jClient.OngoingBindSpec.class);
+
+        when(query.bind(any())).thenReturn(bind);
+        when(bind.to(anyString())).thenReturn(query);
+        when(query.fetch()).thenReturn(fetch);
+        when(fetch.first()).thenReturn(Optional.empty());
+        when(neo4jClient.query(anyString())).thenReturn(query);
+
+        GraphRepository repository = new GraphRepository(neo4jClient);
+
+        repository.findQuizTargetBySources(
+            List.of("JLPT:N5"),
+            List.of("食べる"),
+            true,
+            true,
+            true
+        );
+
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ORDER BY sampleKey"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("NOT w.lemma CONTAINS '～'"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("LIMIT 1"));
+        verify(query).bind(GraphRepository.INITIAL_BOOKMARK);
+    }
+
+    @Test
+    void findQuizCandidateWordsByEdgeUsesDepthTwoWeightedSampling() {
+        Neo4jClient neo4jClient = mock(Neo4jClient.class);
+        @SuppressWarnings("unchecked")
+        Neo4jClient.RecordFetchSpec<Map<String, Object>> fetch = mock(Neo4jClient.RecordFetchSpec.class);
+        Neo4jClient.UnboundRunnableSpec query = mock(Neo4jClient.UnboundRunnableSpec.class);
+        @SuppressWarnings("unchecked")
+        Neo4jClient.OngoingBindSpec<Object, Neo4jClient.RunnableSpec> bind = mock(Neo4jClient.OngoingBindSpec.class);
+
+        when(query.bind(any())).thenReturn(bind);
+        when(bind.to(anyString())).thenReturn(query);
+        when(query.fetch()).thenReturn(fetch);
+        when(fetch.all()).thenReturn(List.of());
+        when(neo4jClient.query(anyString())).thenReturn(query);
+
+        GraphRepository repository = new GraphRepository(neo4jClient);
+
+        repository.findQuizCandidateWordsByEdge(
+            "食べる",
+            List.of("JLPT:N5"),
+            List.of("食べる"),
+            9,
+            true,
+            true,
+            true
+        );
+
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("[:CO_OCCURS*1..2]"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("WHEN 1 THEN 1.0"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ELSE 0.35"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ORDER BY sampleKey"));
+        verify(query).bind("食べる");
+        verify(query).bind(9);
+    }
 }
