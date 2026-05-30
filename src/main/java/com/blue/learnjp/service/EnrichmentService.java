@@ -2,11 +2,15 @@ package com.blue.learnjp.service;
 
 import com.blue.learnjp.dto.AnalysisResult;
 import com.blue.learnjp.dto.JakoLookupResult;
+import com.blue.learnjp.http.CircuitBreakerOpenException;
+import com.blue.learnjp.http.RetryableExternalServiceException;
 import com.blue.learnjp.repository.GraphRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -20,18 +24,32 @@ public class EnrichmentService {
 
     private static final Logger log = LoggerFactory.getLogger(EnrichmentService.class);
     private static final int BATCH_SIZE = 10;
+    private static final int MIN_EXAMPLE_LENGTH = 5;
 
     private final GraphRepository graphRepository;
     private final NaverJakoDictionaryService jakoService;
     private final OpenClawService openClawService;
+    private final ExampleQueueService exampleQueueService;
 
-    public EnrichmentService(GraphRepository graphRepository, NaverJakoDictionaryService jakoService, OpenClawService openClawService) {
+    public EnrichmentService(GraphRepository graphRepository,
+                             NaverJakoDictionaryService jakoService,
+                             OpenClawService openClawService,
+                             ExampleQueueService exampleQueueService) {
         this.graphRepository = graphRepository;
         this.jakoService = jakoService;
         this.openClawService = openClawService;
+        this.exampleQueueService = exampleQueueService;
     }
 
     public record EnrichResult(int updated, int batchesRequested, String status, String error) {}
+    public record JlptExampleBackfillResult(
+        int lookedUpWords,
+        int examplesEnqueued,
+        int skippedWords,
+        List<String> attemptedLemmas,
+        String status,
+        String error
+    ) {}
 
     /**
      * 미보완 노드를 배치 단위로 jako API를 통해 보강한다.
@@ -160,6 +178,9 @@ public class EnrichmentService {
                             }
                         }
                     }
+                } catch (RateLimitException | RetryableExternalServiceException | CircuitBreakerOpenException e) {
+                    log.warn("Transient enrichment failure on '{}', stopping batch early: {}", lemma, e.getMessage());
+                    return new EnrichResult(totalUpdated, batchCount, "paused", e.getMessage());
                 } catch (Exception e) {
                     log.warn("Failed to enrich '{}': {}", lemma, e.getMessage());
                 }
@@ -177,5 +198,114 @@ public class EnrichmentService {
      */
     public int countWordsNeedingEnrichment() {
         return graphRepository.findWordsNeedingEnrichment(Integer.MAX_VALUE).size();
+    }
+
+    /**
+     * JLPT 단어의 jako 예문을 ExampleQueue에 적재한다.
+     * 실제 edge 생성은 기존 ExampleQueue consumer가 sentence pipeline을 통해 비동기로 수행한다.
+     */
+    public JlptExampleBackfillResult backfillJlptExampleEdges(String levelsCsv, int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 50));
+        List<String> sources = normalizeJlptSources(levelsCsv);
+        List<Map<String, Object>> words = graphRepository.findJlptWordsNeedingExampleBackfill(sources, safeLimit);
+
+        int lookedUpWords = 0;
+        int examplesEnqueued = 0;
+        int skippedWords = 0;
+        List<String> attemptedLemmas = new ArrayList<>();
+
+        for (Map<String, Object> word : words) {
+            String lemma = stringValue(word.get("lemma"));
+            if (lemma.isBlank()) {
+                skippedWords++;
+                continue;
+            }
+
+            String reading = stringValue(word.get("reading"));
+            attemptedLemmas.add(lemma);
+            graphRepository.markJlptExampleBackfillAttempt(lemma, 0, "IN_PROGRESS");
+
+            try {
+                JakoLookupResult jako = jakoService.lookup(lemma, reading);
+                lookedUpWords++;
+
+                if (!jako.found()) {
+                    graphRepository.markJlptExampleBackfillAttempt(lemma, 0, "NOT_FOUND");
+                    skippedWords++;
+                    continue;
+                }
+
+                int enqueuedForWord = 0;
+                for (JakoLookupResult.Example example : jako.examples()) {
+                    if (!isUsefulEdgeExample(example.textJa())) {
+                        continue;
+                    }
+                    exampleQueueService.enqueue(example.textJa(), "EXAMPLE:JLPT_EDGE_BACKFILL");
+                    enqueuedForWord++;
+                }
+
+                examplesEnqueued += enqueuedForWord;
+                graphRepository.markJlptExampleBackfillAttempt(
+                    lemma,
+                    enqueuedForWord,
+                    enqueuedForWord > 0 ? "ENQUEUED" : "NO_USEFUL_EXAMPLES"
+                );
+            } catch (RateLimitException | RetryableExternalServiceException | CircuitBreakerOpenException e) {
+                log.warn("JLPT example edge backfill paused on '{}': {}", lemma, e.getMessage());
+                graphRepository.markJlptExampleBackfillAttempt(lemma, 0, "PAUSED");
+                return new JlptExampleBackfillResult(
+                    lookedUpWords,
+                    examplesEnqueued,
+                    skippedWords,
+                    List.copyOf(attemptedLemmas),
+                    "paused",
+                    e.getMessage()
+                );
+            } catch (Exception e) {
+                log.warn("JLPT example edge backfill failed for '{}': {}", lemma, e.getMessage());
+                graphRepository.markJlptExampleBackfillAttempt(lemma, 0, "FAILED");
+                skippedWords++;
+            }
+        }
+
+        return new JlptExampleBackfillResult(
+            lookedUpWords,
+            examplesEnqueued,
+            skippedWords,
+            List.copyOf(attemptedLemmas),
+            "ok",
+            null
+        );
+    }
+
+    private List<String> normalizeJlptSources(String levelsCsv) {
+        List<String> rawLevels = levelsCsv == null || levelsCsv.isBlank()
+            ? List.of("N5", "N4", "N3", "N2", "N1")
+            : Arrays.stream(levelsCsv.split(",")).map(String::trim).filter(s -> !s.isBlank()).toList();
+
+        List<String> sources = new ArrayList<>();
+        for (String rawLevel : rawLevels) {
+            String level = rawLevel.toUpperCase();
+            if (!List.of("N5", "N4", "N3", "N2", "N1").contains(level)) {
+                throw new IllegalArgumentException("Unsupported JLPT level: " + rawLevel);
+            }
+            sources.add("JLPT:" + level);
+        }
+        return List.copyOf(sources);
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private boolean isUsefulEdgeExample(String textJa) {
+        if (textJa == null) {
+            return false;
+        }
+        String normalized = textJa.replaceAll("\\s+", "");
+        if (normalized.length() < MIN_EXAMPLE_LENGTH) {
+            return false;
+        }
+        return normalized.matches(".*[ぁ-んァ-ン].*");
     }
 }

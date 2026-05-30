@@ -6,6 +6,11 @@ public record QuizWordSetResponse(
     String strategyUsed,
     int requestedCount,
     int returnedCount,
+    QuizWord requiredWord,
+    List<QuizWord> candidateWords,
+    boolean allowDropCandidates,
+    int maxCandidateWordsToUse,
+    int maxExtraContentWords,
     List<QuizWord> words
 ) {
     public record QuizWord(

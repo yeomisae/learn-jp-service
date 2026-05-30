@@ -2,15 +2,20 @@ package com.blue.learnjp.service;
 
 import com.blue.learnjp.config.NaverJakoConfig;
 import com.blue.learnjp.dto.JakoLookupResult;
+import com.blue.learnjp.http.CircuitBreakerOpenException;
+import com.blue.learnjp.http.ResilientCallExecutor;
+import com.blue.learnjp.http.RetryableExternalServiceException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.hc.client5.http.classic.methods.HttpGet;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.net.HttpURLConnection;
-import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -78,12 +83,19 @@ public class NaverJakoDictionaryService {
     private final NaverJakoConfig config;
     private final ObjectMapper objectMapper;
     private final Semaphore semaphore;
+    private final CloseableHttpClient httpClient;
+    private final ResilientCallExecutor callExecutor;
     private volatile long lastRequestTime = 0;
 
-    public NaverJakoDictionaryService(NaverJakoConfig config, ObjectMapper objectMapper) {
+    public NaverJakoDictionaryService(NaverJakoConfig config,
+                                      ObjectMapper objectMapper,
+                                      @Qualifier("naverJakoHttpClient") CloseableHttpClient httpClient,
+                                      @Qualifier("naverJakoCallExecutor") ResilientCallExecutor callExecutor) {
         this.config = config;
         this.objectMapper = objectMapper;
         this.semaphore = new Semaphore(config.maxConcurrent());
+        this.httpClient = httpClient;
+        this.callExecutor = callExecutor;
     }
 
     /** 괄호 및 괄호 내용 제거: "こす (みずを～)" → "こす", "こす（水を～）" → "こす" */
@@ -151,11 +163,12 @@ public class NaverJakoDictionaryService {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.warn("jako lookup interrupted for word: {}", word);
-            return JakoLookupResult.notFound();
+            throw new RetryableExternalServiceException("jako lookup interrupted for word: " + word, e, false);
+        } catch (RateLimitException | RetryableExternalServiceException | CircuitBreakerOpenException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("jako lookup failed for word: {} - {}", word, e.getMessage());
-            return JakoLookupResult.notFound();
+            log.warn("jako lookup failed for word: {}", word, e);
+            throw new RuntimeException("jako lookup failed for word: " + word, e);
         }
     }
 
@@ -228,7 +241,7 @@ public class NaverJakoDictionaryService {
         return new ArrayList<>(variants);
     }
 
-    private void enforceDelay() throws InterruptedException {
+    private synchronized void enforceDelay() throws InterruptedException {
         long now = System.currentTimeMillis();
         long elapsed = now - lastRequestTime;
         if (elapsed < config.delayMs()) {
@@ -237,23 +250,43 @@ public class NaverJakoDictionaryService {
         lastRequestTime = System.currentTimeMillis();
     }
 
-    private String callApi(String word) throws IOException {
+    private String callApi(String word) {
         String encoded = URLEncoder.encode(word, StandardCharsets.UTF_8);
         String url = config.baseUrl() + "?query=" + encoded + "&m=pc&range=word";
+        return callExecutor.execute("dictionary.lookup", () -> executeGet(url, word));
+    }
 
-        HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
-        conn.setRequestMethod("GET");
-        conn.setRequestProperty("User-Agent", USER_AGENT);
-        conn.setRequestProperty("Referer", REFERER);
-        conn.setConnectTimeout(config.timeoutMs());
-        conn.setReadTimeout(config.timeoutMs());
+    private String executeGet(String url, String word) throws IOException {
+        HttpGet request = new HttpGet(url);
+        request.setHeader("User-Agent", USER_AGENT);
+        request.setHeader("Referer", REFERER);
 
-        int status = conn.getResponseCode();
-        if (status != 200) {
-            throw new IOException("jako API returned " + status + " for word: " + word);
+        try (CloseableHttpResponse response = httpClient.execute(request)) {
+            int status = response.getCode();
+            String payload = readEntity(response);
+
+            if (status == 429) {
+                throw new RateLimitException("jako rate limit reached for word '" + word + "'");
+            }
+            if (status == 408 || status >= 500) {
+                throw new RetryableExternalServiceException(
+                    "jako returned retryable status " + status + " for word '" + word + "'",
+                    false
+                );
+            }
+            if (status != 200) {
+                throw new IllegalStateException("jako API returned " + status + " for word: " + word);
+            }
+
+            return payload;
         }
+    }
 
-        return new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+    private String readEntity(CloseableHttpResponse response) throws IOException {
+        if (response.getEntity() == null) {
+            return "";
+        }
+        return new String(response.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
     }
 
     /**

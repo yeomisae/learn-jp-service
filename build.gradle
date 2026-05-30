@@ -19,7 +19,9 @@ repositories {
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-neo4j'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.apache.httpcomponents.client5:httpclient5'
 
 	// Google Sheets API
 	implementation 'com.google.apis:google-api-services-sheets:v4-rev20251110-2.0.0'

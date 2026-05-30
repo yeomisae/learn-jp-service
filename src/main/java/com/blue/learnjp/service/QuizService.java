@@ -21,8 +21,11 @@ public class QuizService {
 
     private static final String RANDOM_JLPT = "random_jlpt";
     private static final List<String> DEFAULT_LEVELS = List.of("N5", "N4", "N3", "N2", "N1");
-    private static final int DEFAULT_COUNT = 3;
-    private static final int MAX_COUNT = 50;
+    private static final int DEFAULT_COUNT = 5;
+    private static final int MAX_COUNT = 10;
+    private static final boolean ALLOW_DROP_CANDIDATES = true;
+    private static final int MAX_CANDIDATE_WORDS_TO_USE = 1;
+    private static final int MAX_EXTRA_CONTENT_WORDS = 2;
 
     private final GraphRepository graphRepository;
     private final NaverJakoDictionaryService jakoService;
@@ -35,21 +38,32 @@ public class QuizService {
     public QuizWordSetResponse createWordSet(QuizWordSetRequest request) {
         NormalizedRequest normalized = normalize(request);
 
-        List<QuizWordSetResponse.QuizWord> words = graphRepository.findQuizWordsBySources(
-                normalized.sources(),
-                normalized.excludeLemmas(),
-                normalized.count(),
-                normalized.requireReading(),
-                normalized.requireMeaning(),
-                normalized.requireDictEntry()
-            ).stream()
+        List<Map<String, Object>> rows = graphRepository.findQuizWordsBySources(
+            normalized.sources(),
+            normalized.excludeLemmas(),
+            normalized.count(),
+            normalized.requireReading(),
+            normalized.requireMeaning(),
+            normalized.requireDictEntry()
+        );
+
+        List<QuizWordSetResponse.QuizWord> words = rows.stream()
             .map(this::toQuizWord)
+            .toList();
+        QuizWordSetResponse.QuizWord requiredWord = selectRequiredWord(rows);
+        List<QuizWordSetResponse.QuizWord> candidateWords = words.stream()
+            .filter(word -> requiredWord == null || !word.equals(requiredWord))
             .toList();
 
         return new QuizWordSetResponse(
             normalized.strategy(),
             normalized.count(),
             words.size(),
+            requiredWord,
+            candidateWords,
+            ALLOW_DROP_CANDIDATES,
+            MAX_CANDIDATE_WORDS_TO_USE,
+            MAX_EXTRA_CONTENT_WORDS,
             words
         );
     }
@@ -93,6 +107,48 @@ public class QuizService {
             intValue(row.get("starGrade")),
             stringValue(row.get("dictEntryId"))
         );
+    }
+
+    private QuizWordSetResponse.QuizWord selectRequiredWord(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+
+        Map<String, Object> best = rows.getFirst();
+        int bestScore = anchorScore(best);
+        for (int i = 1; i < rows.size(); i++) {
+            Map<String, Object> candidate = rows.get(i);
+            int candidateScore = anchorScore(candidate);
+            if (candidateScore > bestScore) {
+                best = candidate;
+                bestScore = candidateScore;
+            }
+        }
+        return toQuizWord(best);
+    }
+
+    private int anchorScore(Map<String, Object> row) {
+        String lemma = stringValue(row.get("lemma"));
+        String combined = (stringValue(row.get("pos")) + " " + stringValue(row.get("posDesc")) + " "
+            + stringValue(row.get("posDetail"))).toLowerCase();
+
+        if (lemma.contains("～") || lemma.matches(".*\\d.*")) {
+            return 0;
+        }
+        if (combined.contains("명사") || combined.contains("동사") || combined.contains("형용사")
+            || combined.contains("형용동사") || combined.contains("な형용사")) {
+            return 5;
+        }
+        if (combined.contains("부사")) {
+            return 3;
+        }
+        if (combined.contains("대명사")) {
+            return 2;
+        }
+        if (combined.contains("접속사")) {
+            return 1;
+        }
+        return 0;
     }
 
     private NormalizedRequest normalize(QuizWordSetRequest request) {
@@ -168,8 +224,8 @@ public class QuizService {
         applyDelta(deltas, request.correctLemmas(), 1, targetSet, resolvedMappings, ignoredLemmas);
         deltas.entrySet().removeIf(entry -> entry.getValue() == 0);
         return new BookmarkResolution(
-            Map.copyOf(deltas),
-            Map.copyOf(resolvedMappings),
+            Collections.unmodifiableMap(new LinkedHashMap<>(deltas)),
+            Collections.unmodifiableMap(new LinkedHashMap<>(resolvedMappings)),
             List.copyOf(ignoredLemmas)
         );
     }

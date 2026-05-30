@@ -181,10 +181,12 @@ class GraphRepositoryTests {
 
         assertThat(updated).isEqualTo(2);
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("w.bookmark = coalesce(w.bookmark, $initialBookmark) + update.delta"));
-        verify(updateQuery).bind(List.of(
+        var updatesCaptor = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(updateQuery).bind(updatesCaptor.capture());
+        assertThat((List<Map<String, Object>>) updatesCaptor.getValue()).containsExactlyInAnyOrder(
             Map.of("lemma", "薬局", "delta", -1),
             Map.of("lemma", "薬", "delta", 1)
-        ));
+        );
         verify(updateQuery).bind(GraphRepository.INITIAL_BOOKMARK);
     }
 

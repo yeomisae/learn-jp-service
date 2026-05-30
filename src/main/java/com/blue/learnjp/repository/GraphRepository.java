@@ -166,6 +166,55 @@ public class GraphRepository {
     }
 
     /**
+     * jako 예문 기반 edge backfill 대상 JLPT 단어를 조회한다.
+     * 이미 시도한 단어는 제외하여 작은 limit로 반복 실행해도 같은 단어를 계속 고르지 않는다.
+     */
+    public List<Map<String, Object>> findJlptWordsNeedingExampleBackfill(List<String> sources, int limit) {
+        return neo4jClient.query("""
+            MATCH (w:Word)
+            WITH w,
+                 [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources
+            WHERE ANY(source IN $sources WHERE source IN wordSources)
+              AND w.jlptExampleBackfilledAt IS NULL
+              AND coalesce(w.jlptExampleBackfillStatus, '') = ''
+              AND coalesce(w.dictEntryId, '') <> 'NOT_FOUND'
+            RETURN w.lemma AS lemma,
+                   w.reading AS reading,
+                   w.source AS source,
+                   coalesce(w.dictEntryId, '') AS dictEntryId
+            ORDER BY rand()
+            LIMIT $limit
+            """)
+            .bind(sources).to("sources")
+            .bind(limit).to("limit")
+            .fetch().all().stream().toList();
+    }
+
+    /**
+     * JLPT 예문 edge backfill 시도 결과를 Word 노드에 기록한다.
+     */
+    public void markJlptExampleBackfillAttempt(String lemma, int exampleCount, String status) {
+        neo4jClient.query("""
+            MATCH (w:Word {lemma: $lemma})
+            SET w.jlptExampleBackfillStartedAt = CASE
+                    WHEN $status = 'IN_PROGRESS' THEN datetime()
+                    ELSE coalesce(w.jlptExampleBackfillStartedAt, datetime())
+                END,
+                w.jlptExampleBackfilledAt = CASE
+                    WHEN $status = 'IN_PROGRESS' THEN w.jlptExampleBackfilledAt
+                    ELSE datetime()
+                END,
+                w.jlptExampleBackfillExampleCount = $exampleCount,
+                w.jlptExampleBackfillStatus = $status,
+                w.updatedAt = datetime()
+            """)
+            .bind(lemma).to("lemma")
+            .bind(exampleCount).to("exampleCount")
+            .bind(status != null ? status : "").to("status")
+            .run();
+    }
+
+    /**
      * 기존 Word 노드의 누적 필드를 reconcile된 최종값으로 덮어쓴다 (누적 아님).
      * reconcile 후 의미적 중복이 제거된 값을 직접 SET한다.
      */
@@ -306,7 +355,9 @@ public class GraphRepository {
         }
 
         List<Map<String, Object>> updates = new ArrayList<>();
-        for (Map.Entry<String, Integer> entry : bookmarkDeltas.entrySet()) {
+        List<Map.Entry<String, Integer>> entries = new ArrayList<>(bookmarkDeltas.entrySet());
+        entries.sort(Map.Entry.comparingByKey());
+        for (Map.Entry<String, Integer> entry : entries) {
             updates.add(Map.of(
                 "lemma", entry.getKey(),
                 "delta", entry.getValue()
@@ -355,6 +406,9 @@ public class GraphRepository {
             MERGE (eq:ExampleQueue {textJa: $textJa})
             ON CREATE SET eq.source = $source,
                           eq.status = 'PENDING',
+                          eq.retryCount = 0,
+                          eq.lastError = '',
+                          eq.nextAttemptAt = datetime(),
                           eq.createdAt = datetime()
             """)
             .bind(textJa).to("textJa")
@@ -367,9 +421,13 @@ public class GraphRepository {
      */
     public List<Map<String, Object>> fetchPendingExamples(int limit) {
         return new ArrayList<>(neo4jClient.query("""
-            MATCH (eq:ExampleQueue {status: 'PENDING'})
-            RETURN eq.textJa AS textJa, eq.source AS source
-            ORDER BY eq.createdAt
+            MATCH (eq:ExampleQueue)
+            WHERE eq.status = 'PENDING'
+              AND (eq.nextAttemptAt IS NULL OR eq.nextAttemptAt <= datetime())
+            RETURN eq.textJa AS textJa,
+                   eq.source AS source,
+                   coalesce(eq.retryCount, 0) AS retryCount
+            ORDER BY coalesce(eq.nextAttemptAt, eq.createdAt), eq.createdAt
             LIMIT $limit
             """)
             .bind(limit).to("limit")
@@ -380,12 +438,48 @@ public class GraphRepository {
      * 예문 큐 상태를 변경한다.
      */
     public void updateExampleQueueStatus(String textJa, String status) {
+        updateExampleQueueStatus(textJa, status, null);
+    }
+
+    /**
+     * 예문 큐 상태를 변경하고, 실패 사유가 있으면 lastError에 기록한다.
+     */
+    public void updateExampleQueueStatus(String textJa, String status, String lastError) {
         neo4jClient.query("""
             MATCH (eq:ExampleQueue {textJa: $textJa})
-            SET eq.status = $status, eq.updatedAt = datetime()
+            SET eq.status = $status,
+                eq.updatedAt = datetime(),
+                eq.nextAttemptAt = null,
+                eq.lastError = CASE
+                    WHEN $status = 'DONE' THEN ''
+                    WHEN trim($lastError) <> '' THEN $lastError
+                    ELSE eq.lastError
+                END
             """)
             .bind(textJa).to("textJa")
             .bind(status).to("status")
+            .bind(lastError != null ? lastError : "").to("lastError")
+            .run();
+    }
+
+    /**
+     * 예문 큐 재시도를 exponential backoff로 예약한다.
+     */
+    public void scheduleExampleRetry(String textJa, int retryCount, long delayMs, String lastError) {
+        long delaySeconds = Math.max(1L, (long) Math.ceil(delayMs / 1000.0));
+
+        neo4jClient.query("""
+            MATCH (eq:ExampleQueue {textJa: $textJa})
+            SET eq.status = 'PENDING',
+                eq.retryCount = $retryCount,
+                eq.lastError = $lastError,
+                eq.nextAttemptAt = datetime() + duration({seconds: $delaySeconds}),
+                eq.updatedAt = datetime()
+            """)
+            .bind(textJa).to("textJa")
+            .bind(retryCount).to("retryCount")
+            .bind(lastError != null ? lastError : "").to("lastError")
+            .bind(delaySeconds).to("delaySeconds")
             .run();
     }
 
@@ -397,6 +491,28 @@ public class GraphRepository {
             .fetch().first()
             .map(row -> ((Number) row.get("cnt")).longValue())
             .orElse(0L);
+    }
+
+    /**
+     * 일시 중단된 예문 큐 항목을 다시 PENDING으로 전환한다.
+     */
+    public int resumePausedExamples(String source, int limit) {
+        return neo4jClient.query("""
+            MATCH (eq:ExampleQueue {status: 'PAUSED'})
+            WHERE $source = '' OR eq.source = $source
+            WITH eq
+            ORDER BY eq.updatedAt, eq.createdAt
+            LIMIT $limit
+            SET eq.status = 'PENDING',
+                eq.nextAttemptAt = datetime(),
+                eq.updatedAt = datetime()
+            RETURN count(eq) AS resumedCount
+            """)
+            .bind(source != null ? source : "").to("source")
+            .bind(limit).to("limit")
+            .fetch().first()
+            .map(row -> ((Number) row.get("resumedCount")).intValue())
+            .orElse(0);
     }
 
     /**

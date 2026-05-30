@@ -1,3 +1,6 @@
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+
 spring:
   application:
     name: learn-jp-service
@@ -13,6 +16,26 @@ openclaw:
   base-url: ${OPENCLAW_BASE_URL:http://127.0.0.1:18789/v1}
   api-key: ${OPENCLAW_API_KEY}
   model: ${OPENCLAW_MODEL:openclaw:jp-analyzer}
+  timeout:
+    connect-ms: 3000
+    read-ms: 180000
+    response-ms: 180000
+    connection-request-ms: 2000
+  pool:
+    max-total: 50
+    max-per-route: 20
+    validate-after-inactivity-ms: 5000
+    idle-evict-ms: 30000
+  retry:
+    max-attempts: 3
+    initial-backoff-ms: 500
+    max-backoff-ms: 5000
+    multiplier: 2.0
+  circuit-breaker:
+    sliding-window-size: 20
+    minimum-number-of-calls: 5
+    failure-rate-threshold: 50
+    open-duration-ms: 30000
 
 naver:
   jako:
@@ -20,6 +43,45 @@ naver:
     delay-ms: 200
     timeout-ms: 5000
     max-concurrent: 1
+    timeout:
+      connect-ms: 2000
+      read-ms: 5000
+      response-ms: 5000
+      connection-request-ms: 1000
+    pool:
+      max-total: 20
+      max-per-route: 4
+      validate-after-inactivity-ms: 5000
+      idle-evict-ms: 30000
+    retry:
+      max-attempts: 3
+      initial-backoff-ms: 300
+      max-backoff-ms: 3000
+      multiplier: 2.0
+    circuit-breaker:
+      sliding-window-size: 20
+      minimum-number-of-calls: 5
+      failure-rate-threshold: 50
+      open-duration-ms: 30000
+
+app:
+  scheduling:
+    enabled: true
+  example-queue:
+    consume-delay-ms: 2000
+    batch-size: 1
+    retry:
+      max-attempts: 8
+      initial-backoff-ms: 10000
+      max-backoff-ms: 300000
+      multiplier: 2.0
+  network:
+    tcp-monitor:
+      enabled: true
+      sample-interval-ms: 30000
+      initial-delay-ms: 5000
+      warn-threshold-ratio: 0.70
+      warn-threshold-count: 2000
 
 google:
   sheets:
@@ -29,3 +91,9 @@ google:
       default: "1y-MrqvflPUWOrLL4wJ01fr-z3nRncd0RYjhhFhLwiWQ"
       news: "1y7BvOIW68RowS3qn_kqgZGj9YHUFtdK_iwQUswx3zYQ"
       jlpt: "1wSA49dHlz0zISAfs6XtpFvlwMH3MQ1D_YeEkgmMy-xs"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

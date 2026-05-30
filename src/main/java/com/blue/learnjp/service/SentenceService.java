@@ -99,13 +99,15 @@ public class SentenceService {
             graphRepository.createCoOccursEdge(from, to, sentence, edge.pattern());
         }
 
-        googleSheetsService.ifPresent(sheets -> {
-            try {
-                sheets.exportWords();
-            } catch (Exception e) {
-                log.warn("Google Sheets sync failed (non-blocking): {}", e.getMessage());
-            }
-        });
+        if (depth == 0) {
+            googleSheetsService.ifPresent(sheets -> {
+                try {
+                    sheets.exportWords();
+                } catch (Exception e) {
+                    log.warn("Google Sheets sync failed (non-blocking): {}", e.getMessage());
+                }
+            });
+        }
     }
 
     /**

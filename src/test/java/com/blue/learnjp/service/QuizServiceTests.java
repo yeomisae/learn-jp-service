@@ -18,13 +18,13 @@ import static org.mockito.Mockito.*;
 class QuizServiceTests {
 
     @Test
-    void createWordSetUsesDefaultJlptStrategyAndFilters() {
+    void createWordSetUsesDefaultJlptStrategyAndSelectsRequiredWord() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
         when(graphRepository.findQuizWordsBySources(
             List.of("JLPT:N5", "JLPT:N4", "JLPT:N3", "JLPT:N2", "JLPT:N1"),
             List.of(),
-            3,
+            5,
             true,
             true,
             true
@@ -39,6 +39,17 @@ class QuizServiceTests {
                 "source", "JLPT:N5",
                 "starGrade", 1,
                 "dictEntryId", "dict-1"
+            ),
+            Map.of(
+                "lemma", "どうも",
+                "reading", "どうも",
+                "meaning", "아무래도",
+                "pos", "부사",
+                "posDetail", "副詞",
+                "posDesc", "부사",
+                "source", "JLPT:N5",
+                "starGrade", 0,
+                "dictEntryId", "dict-2"
             )
         ));
 
@@ -49,13 +60,22 @@ class QuizServiceTests {
         ));
 
         assertThat(response.strategyUsed()).isEqualTo("random_jlpt");
-        assertThat(response.requestedCount()).isEqualTo(3);
-        assertThat(response.returnedCount()).isEqualTo(1);
-        assertThat(response.words()).containsExactly(
+        assertThat(response.requestedCount()).isEqualTo(5);
+        assertThat(response.returnedCount()).isEqualTo(2);
+        assertThat(response.requiredWord()).isEqualTo(
             new QuizWordSetResponse.QuizWord(
                 "食べる", "たべる", "먹다", "동사", "下一段他動詞", "하1단 타동사", "JLPT:N5", 1, "dict-1"
             )
         );
+        assertThat(response.candidateWords()).containsExactly(
+            new QuizWordSetResponse.QuizWord(
+                "どうも", "どうも", "아무래도", "부사", "副詞", "부사", "JLPT:N5", 0, "dict-2"
+            )
+        );
+        assertThat(response.allowDropCandidates()).isTrue();
+        assertThat(response.maxCandidateWordsToUse()).isEqualTo(1);
+        assertThat(response.maxExtraContentWords()).isEqualTo(2);
+        assertThat(response.words()).hasSize(2);
     }
 
     @Test
@@ -85,6 +105,47 @@ class QuizServiceTests {
             true,
             false
         );
+    }
+
+    @Test
+    void createWordSetPrefersContentWordAsRequiredWord() {
+        GraphRepository graphRepository = mock(GraphRepository.class);
+        NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
+        when(graphRepository.findQuizWordsBySources(anyList(), anyList(), anyInt(), anyBoolean(), anyBoolean(), anyBoolean()))
+            .thenReturn(List.of(
+                Map.of(
+                    "lemma", "どうも",
+                    "reading", "どうも",
+                    "meaning", "아무래도",
+                    "pos", "부사",
+                    "posDetail", "副詞",
+                    "posDesc", "부사",
+                    "source", "JLPT:N5",
+                    "starGrade", 0,
+                    "dictEntryId", "dict-1"
+                ),
+                Map.of(
+                    "lemma", "辞書",
+                    "reading", "じしょ",
+                    "meaning", "사전",
+                    "pos", "명사",
+                    "posDetail", "名詞",
+                    "posDesc", "명사",
+                    "source", "JLPT:N5",
+                    "starGrade", 1,
+                    "dictEntryId", "dict-2"
+                )
+            ));
+
+        QuizService quizService = new QuizService(graphRepository, jakoService);
+
+        QuizWordSetResponse response = quizService.createWordSet(new QuizWordSetRequest(
+            "random_jlpt", List.of("N5"), 2, List.of(), true, true, true
+        ));
+
+        assertThat(response.requiredWord().lemma()).isEqualTo("辞書");
+        assertThat(response.candidateWords()).extracting(QuizWordSetResponse.QuizWord::lemma)
+            .containsExactly("どうも");
     }
 
     @Test
