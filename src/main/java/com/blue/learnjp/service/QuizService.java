@@ -276,48 +276,6 @@ public class QuizService {
         );
     }
 
-    private QuizWordSetResponse.QuizWord selectRequiredWord(List<Map<String, Object>> rows) {
-        if (rows == null || rows.isEmpty()) {
-            return null;
-        }
-
-        Map<String, Object> best = rows.getFirst();
-        int bestScore = anchorScore(best);
-        for (int i = 1; i < rows.size(); i++) {
-            Map<String, Object> candidate = rows.get(i);
-            int candidateScore = anchorScore(candidate);
-            if (candidateScore > bestScore) {
-                best = candidate;
-                bestScore = candidateScore;
-            }
-        }
-        return toQuizWord(best);
-    }
-
-    private int anchorScore(Map<String, Object> row) {
-        String lemma = stringValue(row.get("lemma"));
-        String combined = (stringValue(row.get("pos")) + " " + stringValue(row.get("posDesc")) + " "
-            + stringValue(row.get("posDetail"))).toLowerCase();
-
-        if (lemma.contains("～") || lemma.matches(".*\\d.*")) {
-            return 0;
-        }
-        if (combined.contains("명사") || combined.contains("동사") || combined.contains("형용사")
-            || combined.contains("형용동사") || combined.contains("な형용사")) {
-            return 5;
-        }
-        if (combined.contains("부사")) {
-            return 3;
-        }
-        if (combined.contains("대명사")) {
-            return 2;
-        }
-        if (combined.contains("접속사")) {
-            return 1;
-        }
-        return 0;
-    }
-
     private NormalizedRequest normalize(QuizWordSetRequest request) {
         String strategy = request != null && request.strategy() != null
             ? request.strategy().trim().toLowerCase()
