@@ -277,9 +277,9 @@ public class GraphRepository {
     public Map<String, Map<String, Object>> findWordsByLemmas(List<String> lemmas) {
         Collection<Map<String, Object>> rows = neo4jClient.query("""
             MATCH (w:Word) WHERE w.lemma IN $lemmas
-            RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos,
+            RETURN w.lemma AS lemma, w.reading AS reading, w.meaning AS meaning, w.pos AS pos,
                    w.synonyms AS synonyms, w.antonyms AS antonyms,
-                   w.description AS description, w.surface AS surface,
+                   w.description AS description, w.surface AS surface, w.source AS source,
                    coalesce(w.bookmark, $initialBookmark) AS bookmark
             """)
             .bind(lemmas).to("lemmas")

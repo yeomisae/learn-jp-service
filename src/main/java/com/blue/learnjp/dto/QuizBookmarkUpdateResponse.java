@@ -14,6 +14,9 @@ public record QuizBookmarkUpdateResponse(
 ) {
     public record TargetResult(
         String lemma,
+        String reading,
+        String source,
+        String meaning,
         String result,
         Integer bookmark
     ) {}

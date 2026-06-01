@@ -169,10 +169,20 @@ public class QuizService {
             String result = delta == null ? "unchanged" : delta < 0 ? "wrong" : "correct";
             Map<String, Object> current = currentWords.get(lemma);
             Integer bookmark = current != null ? intValueOrNull(current.get("bookmark")) : null;
+            String reading = current != null ? stringValue(current.get("reading")) : "";
+            String source = current != null ? stringValue(current.get("source")) : "";
+            String meaning = current != null ? stringValue(current.get("meaning")) : "";
             if (missing.contains(lemma)) {
                 result = "missing";
             }
-            results.add(new QuizBookmarkUpdateResponse.TargetResult(lemma, result, bookmark));
+            results.add(new QuizBookmarkUpdateResponse.TargetResult(
+                lemma,
+                reading,
+                source,
+                meaning,
+                result,
+                bookmark
+            ));
         }
         return List.copyOf(results);
     }
@@ -187,10 +197,58 @@ public class QuizService {
             if (result.lemma() == null || result.lemma().isBlank()) {
                 continue;
             }
-            lines.add("• " + result.lemma() + " " + resultMark(result.result()) + " ("
+            lines.add("• " + formatTargetWord(result) + " " + resultMark(result.result()) + " ("
                 + (result.bookmark() != null ? result.bookmark() : "-") + ")");
         }
         return lines.isEmpty() ? List.of("• 기록 없음") : List.copyOf(lines);
+    }
+
+    private String formatTargetWord(QuizBookmarkUpdateResponse.TargetResult result) {
+        StringBuilder text = new StringBuilder(result.lemma());
+        if (result.reading() != null && !result.reading().isBlank()
+            && !result.reading().equals(result.lemma())) {
+            text.append("(").append(result.reading()).append(")");
+        }
+        text.append(": ").append(displaySource(result.source()));
+        String meaning = compactMeaning(result.meaning());
+        if (!meaning.isBlank()) {
+            text.append(", ").append(meaning);
+        }
+        return text.toString();
+    }
+
+    private String displaySource(String source) {
+        if (source == null || source.isBlank()) {
+            return "-";
+        }
+        for (String part : source.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.startsWith("JLPT:")) {
+                return trimmed.substring("JLPT:".length());
+            }
+        }
+        return source.split(",")[0].trim();
+    }
+
+    private String compactMeaning(String meaning) {
+        if (meaning == null || meaning.isBlank()) {
+            return "";
+        }
+        String compact = meaning.trim();
+        int comma = compact.indexOf(',');
+        int period = compact.indexOf('.');
+        int cut = -1;
+        if (comma >= 0 && period >= 0) {
+            cut = Math.min(comma, period);
+        } else if (comma >= 0) {
+            cut = comma;
+        } else if (period >= 0) {
+            cut = period;
+        }
+        if (cut > 0) {
+            compact = compact.substring(0, cut).trim();
+        }
+        return compact;
     }
 
     private String resultMark(String result) {
