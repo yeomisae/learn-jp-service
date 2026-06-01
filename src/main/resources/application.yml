@@ -82,6 +82,8 @@ app:
       initial-delay-ms: 5000
       warn-threshold-ratio: 0.70
       warn-threshold-count: 2000
+  quiz-history:
+    sqlite-path: ${QUIZ_HISTORY_SQLITE_PATH:${user.home}/.config/learn-jp/quiz-history.sqlite}
 
 google:
   sheets:

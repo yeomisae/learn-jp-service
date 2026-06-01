@@ -2,7 +2,6 @@ package com.blue.learnjp.service;
 
 import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
-import com.blue.learnjp.dto.JakoLookupResult;
 import com.blue.learnjp.dto.QuizTurnRequest;
 import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
@@ -238,32 +237,28 @@ class QuizServiceTests {
     void updateBookmarksAppliesWrongAndCorrectDeltas() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(graphRepository.findWordsByLemmas(List.of("薬局", "薬")))
+        when(graphRepository.findWordsByWordIds(List.of("word-pharmacy", "word-medicine")))
             .thenReturn(Map.of(
-                "薬局", Map.of("lemma", "薬局"),
-                "薬", Map.of("lemma", "薬")
-            ))
-            .thenReturn(Map.of(
-                "薬局", Map.of("wordId", "word-pharmacy", "lemma", "薬局", "reading", "やっきょく", "source", "JLPT:N5", "meaning", "약국", "bookmark", -4),
-                "薬", Map.of("wordId", "word-medicine", "lemma", "薬", "reading", "くすり", "source", "JLPT:N5", "meaning", "약", "bookmark", -2)
+                "word-pharmacy", Map.of("wordId", "word-pharmacy", "lemma", "薬局", "reading", "やっきょく", "source", "JLPT:N5", "meaning", "약국", "bookmark", -4),
+                "word-medicine", Map.of("wordId", "word-medicine", "lemma", "薬", "reading", "くすり", "source", "JLPT:N5", "meaning", "약", "bookmark", -2)
             ));
-        when(graphRepository.adjustWordBookmarks(Map.of(
-            "薬局", -1,
-            "薬", 1
+        when(graphRepository.adjustWordBookmarksByWordId(Map.of(
+            "word-pharmacy", -1,
+            "word-medicine", 1
         ))).thenReturn(2);
 
         QuizService quizService = new QuizService(graphRepository, jakoService);
 
         QuizBookmarkUpdateResponse response = quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
-            List.of("薬局", "薬"),
-            List.of(" 薬局 ", ""),
-            List.of("薬")
+            List.of("word-pharmacy", "word-medicine"),
+            List.of(" word-pharmacy ", ""),
+            List.of("word-medicine")
         ));
 
         assertThat(response.updatedCount()).isEqualTo(2);
         assertThat(response.appliedDeltas()).containsExactlyInAnyOrderEntriesOf(Map.of(
-            "薬局", -1,
-            "薬", 1
+            "word-pharmacy", -1,
+            "word-medicine", 1
         ));
         assertThat(response.resolvedMappings()).isEmpty();
         assertThat(response.ignoredLemmas()).isEmpty();
@@ -276,123 +271,54 @@ class QuizServiceTests {
     }
 
     @Test
-    void updateBookmarksCancelsOverlappingLemmaDeltas() {
-        GraphRepository graphRepository = mock(GraphRepository.class);
-        NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(graphRepository.adjustWordBookmarks(Map.of())).thenReturn(0);
+    void updateBookmarksRejectsOverlappingWordIds() {
+        QuizService quizService = new QuizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
 
-        QuizService quizService = new QuizService(graphRepository, jakoService);
-
-        QuizBookmarkUpdateResponse response = quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
-            List.of("薬局"),
-            List.of("薬局"),
-            List.of("薬局")
-        ));
-
-        assertThat(response.updatedCount()).isEqualTo(0);
-        assertThat(response.appliedDeltas()).isEmpty();
-        assertThat(response.resolvedMappings()).isEmpty();
-        assertThat(response.ignoredLemmas()).isEmpty();
-        assertThat(response.missingLemmas()).isEmpty();
-        assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("", "薬局", "", "", "", "unchanged", null)
-        );
-        verify(graphRepository).adjustWordBookmarks(Map.of());
+        assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
+            List.of("word-pharmacy"),
+            List.of("word-pharmacy"),
+            List.of("word-pharmacy")
+        )))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("both wrong and correct");
     }
 
     @Test
-    void updateBookmarksIgnoresNoiseOutsideTargetSet() {
-        GraphRepository graphRepository = mock(GraphRepository.class);
-        NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(jakoService.generateVariants("画面")).thenReturn(List.of());
-        when(jakoService.lookup("画面")).thenReturn(JakoLookupResult.notFound());
-        when(graphRepository.findWordsByLemmas(List.of("背中")))
-            .thenReturn(Map.of("背中", Map.of("lemma", "背中")))
-            .thenReturn(Map.of("背中", Map.of("lemma", "背中", "bookmark", -1)));
-        when(graphRepository.findWordsByLemmas(List.of("撮る", "残る", "背中")))
-            .thenReturn(Map.of("背中", Map.of("lemma", "背中", "bookmark", -1)));
-        when(graphRepository.adjustWordBookmarks(Map.of("背中", 1))).thenReturn(1);
+    void updateBookmarksRejectsWordIdsOutsideTargetSet() {
+        QuizService quizService = new QuizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
 
-        QuizService quizService = new QuizService(graphRepository, jakoService);
-
-        QuizBookmarkUpdateResponse response = quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
-            List.of("撮る", "残る", "背中"),
-            List.of("画面"),
-            List.of("背中")
-        ));
-
-        assertThat(response.updatedCount()).isEqualTo(1);
-        assertThat(response.appliedDeltas()).containsExactlyEntriesOf(Map.of("背中", 1));
-        assertThat(response.ignoredLemmas()).containsExactly("画面");
-        assertThat(response.missingLemmas()).isEmpty();
-        assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("", "撮る", "", "", "", "unchanged", null),
-            new QuizBookmarkUpdateResponse.TargetResult("", "残る", "", "", "", "unchanged", null),
-            new QuizBookmarkUpdateResponse.TargetResult("", "背中", "", "", "", "correct", -1)
-        );
-    }
-
-    @Test
-    void updateBookmarksResolvesLemmaIntoTargetSetViaJako() {
-        GraphRepository graphRepository = mock(GraphRepository.class);
-        NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(jakoService.generateVariants("食べます")).thenReturn(List.of());
-        when(jakoService.lookup("食べます")).thenReturn(new JakoLookupResult(
-            true, "食べる", "たべる", "먹다", "동사", "", "", "", 0, "[]", "dict", List.of()
-        ));
-        when(graphRepository.findWordsByLemmas(List.of("食べる")))
-            .thenReturn(Map.of("食べる", Map.of("lemma", "食べる")))
-            .thenReturn(Map.of("食べる", Map.of("lemma", "食べる", "bookmark", -4)));
-        when(graphRepository.adjustWordBookmarks(Map.of("食べる", -1))).thenReturn(1);
-
-        QuizService quizService = new QuizService(graphRepository, jakoService);
-
-        QuizBookmarkUpdateResponse response = quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
-            List.of("食べる"),
-            List.of("食べます"),
+        assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
+            List.of("word-target"),
+            List.of("word-noise"),
             List.of()
-        ));
-
-        assertThat(response.updatedCount()).isEqualTo(1);
-        assertThat(response.appliedDeltas()).containsExactlyEntriesOf(Map.of("食べる", -1));
-        assertThat(response.resolvedMappings()).containsExactlyEntriesOf(Map.of("食べます", "食べる"));
-        assertThat(response.ignoredLemmas()).isEmpty();
-        assertThat(response.missingLemmas()).isEmpty();
-        assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("", "食べる", "", "", "", "wrong", -4)
-        );
+        )))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("wrongWordIds must be included");
     }
 
     @Test
-    void updateBookmarksReportsMissingTargetLemmasWhenResolvedButAbsentInDb() {
+    void updateBookmarksRejectsUnknownTargetWordIds() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(graphRepository.findWordsByLemmas(List.of("薬局"))).thenReturn(Map.of());
-        when(graphRepository.adjustWordBookmarks(Map.of())).thenReturn(0);
+        when(graphRepository.findWordsByWordIds(List.of("missing-word"))).thenReturn(Map.of());
 
         QuizService quizService = new QuizService(graphRepository, jakoService);
 
-        QuizBookmarkUpdateResponse response = quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
-            List.of("薬局"),
-            List.of("薬局"),
+        assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
+            List.of("missing-word"),
+            List.of(),
             List.of()
-        ));
-
-        assertThat(response.updatedCount()).isEqualTo(0);
-        assertThat(response.appliedDeltas()).isEmpty();
-        assertThat(response.missingLemmas()).containsExactly("薬局");
-        assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("", "薬局", "", "", "", "missing", null)
-        );
+        )))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("Unknown targetWordIds");
     }
 
     @Test
     void processTurnUpdatesBookmarksAndCreatesNextWordSet() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(graphRepository.findWordsByLemmas(List.of("食べる")))
-            .thenReturn(Map.of("食べる", Map.of("lemma", "食べる")))
-            .thenReturn(Map.of("食べる", Map.of(
+        when(graphRepository.findWordsByWordIds(List.of("word-eat")))
+            .thenReturn(Map.of("word-eat", Map.of(
                 "wordId", "word-eat",
                 "lemma", "食べる",
                 "reading", "たべる",
@@ -400,7 +326,7 @@ class QuizServiceTests {
                 "meaning", "먹다, 먹이를 먹다.",
                 "bookmark", -3
             )));
-        when(graphRepository.adjustWordBookmarks(Map.of("食べる", 1))).thenReturn(1);
+        when(graphRepository.adjustWordBookmarksByWordId(Map.of("word-eat", 1))).thenReturn(1);
         when(graphRepository.findQuizTargetBySources(
             List.of("JLPT:N5"),
             List.of("食べる"),
@@ -447,9 +373,9 @@ class QuizServiceTests {
             true,
             true,
             true,
-            List.of("食べる"),
+            List.of("word-eat"),
             List.of(),
-            List.of("食べる")
+            List.of("word-eat")
         ));
 
         assertThat(response.bookmark().updatedCount()).isEqualTo(1);

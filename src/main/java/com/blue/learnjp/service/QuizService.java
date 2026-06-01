@@ -1,6 +1,5 @@
 package com.blue.learnjp.service;
 
-import com.blue.learnjp.dto.JakoLookupResult;
 import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
 import com.blue.learnjp.dto.QuizTurnRequest;
@@ -8,6 +7,9 @@ import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -16,10 +18,11 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Service
 public class QuizService {
+
+    private static final Logger log = LoggerFactory.getLogger(QuizService.class);
 
     private static final String RANDOM_JLPT = "random_jlpt";
     private static final List<String> DEFAULT_LEVELS = List.of("N5", "N4", "N3", "N2", "N1");
@@ -31,10 +34,20 @@ public class QuizService {
 
     private final GraphRepository graphRepository;
     private final NaverJakoDictionaryService jakoService;
+    private final QuizHistoryService quizHistoryService;
+
+    @Autowired
+    public QuizService(GraphRepository graphRepository, NaverJakoDictionaryService jakoService,
+                       QuizHistoryService quizHistoryService) {
+        this.graphRepository = graphRepository;
+        this.jakoService = jakoService;
+        this.quizHistoryService = quizHistoryService;
+    }
 
     public QuizService(GraphRepository graphRepository, NaverJakoDictionaryService jakoService) {
         this.graphRepository = graphRepository;
         this.jakoService = jakoService;
+        this.quizHistoryService = null;
     }
 
     public QuizWordSetResponse createWordSet(QuizWordSetRequest request) {
@@ -122,12 +135,33 @@ public class QuizService {
     }
 
     public QuizTurnResponse processTurn(QuizTurnRequest request) {
-        QuizWordSetRequest wordSetRequest = toWordSetRequest(request);
-        normalize(wordSetRequest);
+        QuizWordSetRequest preliminaryWordSetRequest = toWordSetRequest(request, null);
+        NormalizedRequest normalized = normalize(preliminaryWordSetRequest);
+        log.info(
+            "quiz.turn request: levels={}, count={}, targetWordIds={}, wrongWordIds={}, correctWordIds={}, targetIds={}, wrongIds={}, correctIds={}",
+            displayLevels(normalized.sources()),
+            normalized.count(),
+            sizeOf(request != null ? request.targetWordIds() : null),
+            sizeOf(request != null ? request.wrongWordIds() : null),
+            sizeOf(request != null ? request.correctWordIds() : null),
+            displayIds(request != null ? request.targetWordIds() : null),
+            displayIds(request != null ? request.wrongWordIds() : null),
+            displayIds(request != null ? request.correctWordIds() : null)
+        );
 
         QuizBookmarkUpdateResponse bookmark = updateBookmarks(toBookmarkUpdateRequest(request));
+        QuizWordSetRequest wordSetRequest = toWordSetRequest(request, bookmark);
+
         QuizWordSetResponse wordSet = createWordSet(wordSetRequest);
         List<String> targetDisplayLines = buildTargetDisplayLines(bookmark);
+        log.info(
+            "quiz.turn completed: updatedCount={}, appliedDeltas={}, targetLemmas={}, nextWords={}, nextWordIds={}",
+            bookmark.updatedCount(),
+            bookmark.appliedDeltas().size(),
+            targetLemmasFrom(bookmark),
+            wordSet.returnedCount(),
+            displayIds(wordSet.words().stream().map(QuizWordSetResponse.QuizWord::wordId).toList())
+        );
         return new QuizTurnResponse(
             bookmark,
             targetDisplayLines,
@@ -153,27 +187,28 @@ public class QuizService {
     }
 
     private List<QuizBookmarkUpdateResponse.TargetResult> buildTargetResults(
-        List<String> targetLemmas,
+        List<String> targetWordIds,
         Map<String, Integer> appliedDeltas,
         Map<String, Map<String, Object>> currentWords,
-        List<String> missingLemmas
+        List<String> missingWordIds
     ) {
-        if (targetLemmas == null || targetLemmas.isEmpty()) {
+        if (targetWordIds == null || targetWordIds.isEmpty()) {
             return List.of();
         }
 
-        LinkedHashSet<String> missing = new LinkedHashSet<>(missingLemmas != null ? missingLemmas : List.of());
+        LinkedHashSet<String> missing = new LinkedHashSet<>(missingWordIds != null ? missingWordIds : List.of());
         List<QuizBookmarkUpdateResponse.TargetResult> results = new ArrayList<>();
-        for (String lemma : targetLemmas) {
-            Integer delta = appliedDeltas.get(lemma);
+        for (String targetWordId : targetWordIds) {
+            Integer delta = appliedDeltas.get(targetWordId);
             String result = delta == null ? "unchanged" : delta < 0 ? "wrong" : "correct";
-            Map<String, Object> current = currentWords.get(lemma);
+            Map<String, Object> current = currentWords.get(targetWordId);
             Integer bookmark = current != null ? intValueOrNull(current.get("bookmark")) : null;
             String wordId = current != null ? stringValue(current.get("wordId")) : "";
+            String lemma = current != null ? stringValue(current.get("lemma")) : "";
             String reading = current != null ? stringValue(current.get("reading")) : "";
             String source = current != null ? stringValue(current.get("source")) : "";
             String meaning = current != null ? stringValue(current.get("meaning")) : "";
-            if (missing.contains(lemma)) {
+            if (missing.contains(targetWordId)) {
                 result = "missing";
             }
             results.add(new QuizBookmarkUpdateResponse.TargetResult(
@@ -264,36 +299,63 @@ public class QuizService {
 
     public QuizBookmarkUpdateResponse updateBookmarks(QuizBookmarkUpdateRequest request) {
         BookmarkResolution resolution = normalizeBookmarkDeltas(request);
-        Map<String, Map<String, Object>> existingWords = resolution.appliedDeltas().isEmpty()
+        Map<String, Map<String, Object>> existingWords = resolution.targetWordIds().isEmpty()
             ? Map.of()
-            : graphRepository.findWordsByLemmas(new ArrayList<>(resolution.appliedDeltas().keySet()));
+            : graphRepository.findWordsByWordIds(resolution.targetWordIds());
 
         LinkedHashMap<String, Integer> updatableDeltas = new LinkedHashMap<>();
-        List<String> missingLemmas = new ArrayList<>();
+        List<String> missingWordIds = new ArrayList<>();
         for (Map.Entry<String, Integer> entry : resolution.appliedDeltas().entrySet()) {
             if (existingWords.containsKey(entry.getKey())) {
                 updatableDeltas.put(entry.getKey(), entry.getValue());
             } else {
-                missingLemmas.add(entry.getKey());
+                missingWordIds.add(entry.getKey());
             }
         }
-
-        int updatedCount = graphRepository.adjustWordBookmarks(updatableDeltas);
-        Map<String, Map<String, Object>> currentWords = resolution.targetLemmas().isEmpty()
-            ? Map.of()
-            : graphRepository.findWordsByLemmas(resolution.targetLemmas());
-        if (currentWords == null) {
-            currentWords = Map.of();
+        for (String wordId : resolution.targetWordIds()) {
+            if (!existingWords.containsKey(wordId)) {
+                missingWordIds.add(wordId);
+            }
         }
-        return new QuizBookmarkUpdateResponse(
+        if (!missingWordIds.isEmpty()) {
+            log.warn(
+                "quiz.bookmark rejected: unknown targetWordIds={}",
+                displayIds(new ArrayList<>(new LinkedHashSet<>(missingWordIds)))
+            );
+            throw new IllegalArgumentException("Unknown targetWordIds: " + String.join(",", new LinkedHashSet<>(missingWordIds)));
+        }
+
+        int updatedCount = graphRepository.adjustWordBookmarksByWordId(updatableDeltas);
+        Map<String, Map<String, Object>> currentWords = resolution.targetWordIds().isEmpty()
+            ? Map.of()
+            : graphRepository.findWordsByWordIds(resolution.targetWordIds());
+        QuizBookmarkUpdateResponse response = new QuizBookmarkUpdateResponse(
             updatedCount,
             Map.copyOf(updatableDeltas),
             resolution.resolvedMappings(),
             resolution.ignoredLemmas(),
-            List.copyOf(missingLemmas),
-            buildTargetResults(resolution.targetLemmas(), updatableDeltas, currentWords, missingLemmas),
+            List.of(),
+            buildTargetResults(resolution.targetWordIds(), updatableDeltas, currentWords, List.of()),
             "ok"
         );
+        log.info(
+            "quiz.bookmark updated: targetWordIds={}, wrong={}, correct={}, updatedCount={}, targetLemmas={}",
+            resolution.targetWordIds().size(),
+            countDeltas(updatableDeltas, -1),
+            countDeltas(updatableDeltas, 1),
+            response.updatedCount(),
+            targetLemmasFrom(response)
+        );
+        recordHistory(response);
+        return response;
+    }
+
+    private void recordHistory(QuizBookmarkUpdateResponse response) {
+        if (quizHistoryService == null) {
+            return;
+        }
+        int savedCount = quizHistoryService.record(response);
+        log.info("quiz.history recorded: savedCount={}", savedCount);
     }
 
     private QuizWordSetResponse.QuizWord toQuizWord(Map<String, Object> row) {
@@ -311,7 +373,7 @@ public class QuizService {
         );
     }
 
-    private QuizWordSetRequest toWordSetRequest(QuizTurnRequest request) {
+    private QuizWordSetRequest toWordSetRequest(QuizTurnRequest request, QuizBookmarkUpdateResponse bookmark) {
         if (request == null) {
             return null;
         }
@@ -319,11 +381,21 @@ public class QuizService {
             request.strategy(),
             request.levels(),
             request.count(),
-            request.excludeLemmas(),
+            withAdditionalExcludes(request.excludeLemmas(), targetLemmasFrom(bookmark)),
             request.requireReading(),
             request.requireMeaning(),
             request.requireDictEntry()
         );
+    }
+
+    private List<String> targetLemmasFrom(QuizBookmarkUpdateResponse bookmark) {
+        if (bookmark == null || bookmark.targetResults() == null || bookmark.targetResults().isEmpty()) {
+            return List.of();
+        }
+        return bookmark.targetResults().stream()
+            .map(QuizBookmarkUpdateResponse.TargetResult::lemma)
+            .filter(lemma -> lemma != null && !lemma.isBlank())
+            .toList();
     }
 
     private QuizBookmarkUpdateRequest toBookmarkUpdateRequest(QuizTurnRequest request) {
@@ -331,9 +403,9 @@ public class QuizService {
             return null;
         }
         return new QuizBookmarkUpdateRequest(
-            request.targetLemmas(),
-            request.wrongLemmas(),
-            request.correctLemmas()
+            request.targetWordIds(),
+            request.wrongWordIds(),
+            request.correctWordIds()
         );
     }
 
@@ -401,91 +473,90 @@ public class QuizService {
             return new BookmarkResolution(List.of(), Map.of(), Map.of(), List.of());
         }
 
-        List<String> targetLemmas = normalizeLemmas(request.targetLemmas());
-        LinkedHashSet<String> targetSet = new LinkedHashSet<>(targetLemmas);
+        List<String> targetWordIds = normalizeIds(request.targetWordIds());
+        if (targetWordIds.isEmpty()) {
+            log.warn("quiz.bookmark rejected: targetWordIds is required");
+            throw new IllegalArgumentException("targetWordIds is required");
+        }
+        LinkedHashSet<String> targetSet = new LinkedHashSet<>(targetWordIds);
         LinkedHashMap<String, Integer> deltas = new LinkedHashMap<>();
-        LinkedHashMap<String, String> resolvedMappings = new LinkedHashMap<>();
-        LinkedHashSet<String> ignoredLemmas = new LinkedHashSet<>();
+        LinkedHashSet<String> wrongWordIds = new LinkedHashSet<>(normalizeIds(request.wrongWordIds()));
+        LinkedHashSet<String> correctWordIds = new LinkedHashSet<>(normalizeIds(request.correctWordIds()));
 
-        applyDelta(deltas, request.wrongLemmas(), -1, targetSet, resolvedMappings, ignoredLemmas);
-        applyDelta(deltas, request.correctLemmas(), 1, targetSet, resolvedMappings, ignoredLemmas);
-        deltas.entrySet().removeIf(entry -> entry.getValue() == 0);
+        if (!targetSet.containsAll(wrongWordIds)) {
+            log.warn(
+                "quiz.bookmark rejected: wrongWordIds outside targetWordIds wrongIds={} targetIds={}",
+                displayIds(new ArrayList<>(wrongWordIds)),
+                displayIds(targetWordIds)
+            );
+            throw new IllegalArgumentException("wrongWordIds must be included in targetWordIds");
+        }
+        if (!targetSet.containsAll(correctWordIds)) {
+            log.warn(
+                "quiz.bookmark rejected: correctWordIds outside targetWordIds correctIds={} targetIds={}",
+                displayIds(new ArrayList<>(correctWordIds)),
+                displayIds(targetWordIds)
+            );
+            throw new IllegalArgumentException("correctWordIds must be included in targetWordIds");
+        }
+        LinkedHashSet<String> overlap = new LinkedHashSet<>(wrongWordIds);
+        overlap.retainAll(correctWordIds);
+        if (!overlap.isEmpty()) {
+            log.warn("quiz.bookmark rejected: overlapping wordIds={}", displayIds(new ArrayList<>(overlap)));
+            throw new IllegalArgumentException("wordIds cannot be both wrong and correct: " + String.join(",", overlap));
+        }
+
+        wrongWordIds.forEach(wordId -> deltas.put(wordId, -1));
+        correctWordIds.forEach(wordId -> deltas.put(wordId, 1));
         return new BookmarkResolution(
-            targetLemmas,
+            targetWordIds,
             Collections.unmodifiableMap(new LinkedHashMap<>(deltas)),
-            Collections.unmodifiableMap(new LinkedHashMap<>(resolvedMappings)),
-            List.copyOf(ignoredLemmas)
+            Map.of(),
+            List.of()
         );
     }
 
-    private void applyDelta(Map<String, Integer> deltas, List<String> lemmas, int delta,
-                            Set<String> targetSet, Map<String, String> resolvedMappings,
-                            Set<String> ignoredLemmas) {
-        if (lemmas == null || lemmas.isEmpty()) {
-            return;
-        }
-
-        for (String lemma : lemmas) {
-            if (lemma == null || lemma.isBlank()) continue;
-            String normalized = lemma.trim();
-            String resolved = resolveToTargetLemma(normalized, targetSet);
-            if (resolved == null) {
-                ignoredLemmas.add(normalized);
-                continue;
-            }
-            if (!resolved.equals(normalized)) {
-                resolvedMappings.put(normalized, resolved);
-            }
-            deltas.merge(resolved, delta, Integer::sum);
-        }
-    }
-
-    private String resolveToTargetLemma(String lemma, Set<String> targetSet) {
-        if (lemma == null || lemma.isBlank()) {
-            return null;
-        }
-
-        String normalized = lemma.trim();
-        if (targetSet.isEmpty()) {
-            return normalized;
-        }
-        if (targetSet.contains(normalized)) {
-            return normalized;
-        }
-
-        for (String variant : kaoSafeVariants(normalized)) {
-            if (targetSet.contains(variant)) {
-                return variant;
-            }
-        }
-
-        JakoLookupResult jako = jakoService.lookup(normalized);
-        if (jako.found() && targetSet.contains(jako.resolvedLemma())) {
-            return jako.resolvedLemma();
-        }
-
-        return null;
-    }
-
-    private List<String> kaoSafeVariants(String lemma) {
-        try {
-            return jakoService.generateVariants(lemma);
-        } catch (Exception ignored) {
-            return Collections.emptyList();
-        }
-    }
-
-    private List<String> normalizeLemmas(List<String> lemmas) {
-        if (lemmas == null || lemmas.isEmpty()) {
+    private List<String> normalizeIds(List<String> ids) {
+        if (ids == null || ids.isEmpty()) {
             return List.of();
         }
 
         LinkedHashSet<String> normalized = new LinkedHashSet<>();
-        for (String lemma : lemmas) {
-            if (lemma == null || lemma.isBlank()) continue;
-            normalized.add(lemma.trim());
+        for (String id : ids) {
+            if (id == null || id.isBlank()) continue;
+            normalized.add(id.trim());
         }
         return List.copyOf(normalized);
+    }
+
+    private int sizeOf(List<?> values) {
+        return values != null ? values.size() : 0;
+    }
+
+    private long countDeltas(Map<String, Integer> deltas, int value) {
+        return deltas.values().stream().filter(delta -> delta == value).count();
+    }
+
+    private List<String> displayLevels(List<String> sources) {
+        if (sources == null || sources.isEmpty()) {
+            return List.of();
+        }
+        return sources.stream()
+            .map(source -> source != null && source.startsWith("JLPT:") ? source.substring("JLPT:".length()) : source)
+            .toList();
+    }
+
+    private List<String> displayIds(List<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalized = normalizeIds(ids);
+        if (normalized.size() <= 10) {
+            return normalized;
+        }
+        List<String> displayed = new ArrayList<>(normalized.subList(0, 10));
+        displayed.add("...+" + (normalized.size() - 10));
+        return List.copyOf(displayed);
     }
 
     private String stringValue(Object value) {
@@ -523,7 +594,7 @@ public class QuizService {
     ) {}
 
     private record BookmarkResolution(
-        List<String> targetLemmas,
+        List<String> targetWordIds,
         Map<String, Integer> appliedDeltas,
         Map<String, String> resolvedMappings,
         List<String> ignoredLemmas

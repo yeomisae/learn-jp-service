@@ -10,7 +10,7 @@ public record QuizTurnRequest(
     Boolean requireReading,
     Boolean requireMeaning,
     Boolean requireDictEntry,
-    List<String> targetLemmas,
-    List<String> wrongLemmas,
-    List<String> correctLemmas
+    List<String> targetWordIds,
+    List<String> wrongWordIds,
+    List<String> correctWordIds
 ) {}

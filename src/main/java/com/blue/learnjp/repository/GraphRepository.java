@@ -322,6 +322,30 @@ public class GraphRepository {
     }
 
     /**
+     * 주어진 wordId 목록에 해당하는 Word 노드를 조회한다.
+     */
+    public Map<String, Map<String, Object>> findWordsByWordIds(List<String> wordIds) {
+        Collection<Map<String, Object>> rows = neo4jClient.query("""
+            MATCH (w:Word) WHERE w.wordId IN $wordIds
+            RETURN w.wordId AS wordId, w.lemma AS lemma,
+                   w.reading AS reading, w.meaning AS meaning, w.pos AS pos,
+                   w.synonyms AS synonyms, w.antonyms AS antonyms,
+                   w.description AS description, w.surface AS surface, w.source AS source,
+                   coalesce(w.bookmark, $initialBookmark) AS bookmark
+            """)
+            .bind(wordIds).to("wordIds")
+            .bind(INITIAL_BOOKMARK).to("initialBookmark")
+            .fetch().all();
+
+        Map<String, Map<String, Object>> result = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            String wordId = (String) row.get("wordId");
+            result.put(wordId, row);
+        }
+        return result;
+    }
+
+    /**
      * 퀴즈용 단어 세트를 조회한다.
      * source는 "JLPT:N5" 같은 exact token 기준으로 필터링한다.
      */
@@ -520,6 +544,38 @@ public class GraphRepository {
         return neo4jClient.query("""
             UNWIND $updates AS update
             MATCH (w:Word {lemma: update.lemma})
+            SET w.bookmark = coalesce(w.bookmark, $initialBookmark) + update.delta,
+                w.updatedAt = datetime()
+            RETURN count(w) AS updatedCount
+            """)
+            .bind(updates).to("updates")
+            .bind(INITIAL_BOOKMARK).to("initialBookmark")
+            .fetch().first()
+            .map(row -> ((Number) row.get("updatedCount")).intValue())
+            .orElse(0);
+    }
+
+    /**
+     * wordId 기준으로 bookmark 점수를 bulk 증감한다.
+     */
+    public int adjustWordBookmarksByWordId(Map<String, Integer> bookmarkDeltas) {
+        if (bookmarkDeltas == null || bookmarkDeltas.isEmpty()) {
+            return 0;
+        }
+
+        List<Map<String, Object>> updates = new ArrayList<>();
+        List<Map.Entry<String, Integer>> entries = new ArrayList<>(bookmarkDeltas.entrySet());
+        entries.sort(Map.Entry.comparingByKey());
+        for (Map.Entry<String, Integer> entry : entries) {
+            updates.add(Map.of(
+                "wordId", entry.getKey(),
+                "delta", entry.getValue()
+            ));
+        }
+
+        return neo4jClient.query("""
+            UNWIND $updates AS update
+            MATCH (w:Word {wordId: update.wordId})
             SET w.bookmark = coalesce(w.bookmark, $initialBookmark) + update.delta,
                 w.updatedAt = datetime()
             RETURN count(w) AS updatedCount
