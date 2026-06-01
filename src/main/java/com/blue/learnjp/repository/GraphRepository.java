@@ -11,6 +11,7 @@ import java.util.*;
  *
  * <h3>Word 노드 스키마</h3>
  * <ul>
+ *   <li>wordId      — 내부 안정 식별자 (UUID). 외부 이력/참조용</li>
  *   <li>lemma       — 사전형(기본형). 활용형이 아닌 원형 (예: 食べる, 高い). PK 역할</li>
  *   <li>surface     — 문장에서 실제 등장한 표기 (예: 食べました, 高かった)</li>
  *   <li>reading     — 히라가나 읽기 (예: たべる)</li>
@@ -35,6 +36,7 @@ import java.util.*;
 public class GraphRepository {
 
     static final int INITIAL_BOOKMARK = -3;
+    private static final int WORD_ID_GENERATION_ATTEMPTS = 5;
 
     private final Neo4jClient neo4jClient;
 
@@ -51,9 +53,11 @@ public class GraphRepository {
                           String posDetail, String posDesc, String synonyms, String antonyms,
                           String description, String source, int starGrade, String conjugations,
                           String dictEntryId) {
+        String wordId = generateUniqueWordId();
         neo4jClient.query("""
             MERGE (w:Word {lemma: $lemma})
-            ON CREATE SET w.surface = $surface,
+            ON CREATE SET w.wordId = $wordId,
+                          w.surface = $surface,
                           w.reading = $reading,
                           w.meaning = $meaning,
                           w.pos = $pos,
@@ -73,6 +77,7 @@ public class GraphRepository {
                    w.synonyms AS oldSynonyms, w.antonyms AS oldAntonyms,
                    w.description AS oldDescription, w.source AS oldSource
             """)
+            .bind(wordId).to("wordId")
             .bind(surface).to("surface")
             .bind(lemma).to("lemma")
             .bind(reading).to("reading")
@@ -130,6 +135,27 @@ public class GraphRepository {
                     .bind(dictEntryId != null ? dictEntryId : "").to("dictEntryId")
                     .run();
             });
+    }
+
+    private String generateUniqueWordId() {
+        for (int attempt = 0; attempt < WORD_ID_GENERATION_ATTEMPTS; attempt++) {
+            String wordId = UUID.randomUUID().toString();
+            if (!wordIdExists(wordId)) {
+                return wordId;
+            }
+        }
+        throw new IllegalStateException("Failed to generate unique Word.wordId");
+    }
+
+    private boolean wordIdExists(String wordId) {
+        return neo4jClient.query("""
+            MATCH (w:Word {wordId: $wordId})
+            RETURN count(w) > 0 AS exists
+            """)
+            .bind(wordId).to("wordId")
+            .fetch().first()
+            .map(row -> Boolean.TRUE.equals(row.get("exists")))
+            .orElse(false);
     }
 
     private String mergeValues(String existing, String incoming) {
@@ -277,7 +303,8 @@ public class GraphRepository {
     public Map<String, Map<String, Object>> findWordsByLemmas(List<String> lemmas) {
         Collection<Map<String, Object>> rows = neo4jClient.query("""
             MATCH (w:Word) WHERE w.lemma IN $lemmas
-            RETURN w.lemma AS lemma, w.reading AS reading, w.meaning AS meaning, w.pos AS pos,
+            RETURN w.wordId AS wordId, w.lemma AS lemma,
+                   w.reading AS reading, w.meaning AS meaning, w.pos AS pos,
                    w.synonyms AS synonyms, w.antonyms AS antonyms,
                    w.description AS description, w.surface AS surface, w.source AS source,
                    coalesce(w.bookmark, $initialBookmark) AS bookmark
@@ -328,7 +355,8 @@ public class GraphRepository {
                  END AS weight
             WITH w, weight, rand() AS r
             WITH w, -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END) / weight AS sampleKey
-            RETURN w.lemma AS lemma,
+            RETURN w.wordId AS wordId,
+                   w.lemma AS lemma,
                    w.reading AS reading,
                    w.meaning AS meaning,
                    w.pos AS pos,
@@ -383,7 +411,8 @@ public class GraphRepository {
                  END AS weight
             WITH w, weight, rand() AS r
             WITH w, -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END) / weight AS sampleKey
-            RETURN w.lemma AS lemma,
+            RETURN w.wordId AS wordId,
+                   w.lemma AS lemma,
                    w.reading AS reading,
                    w.meaning AS meaning,
                    w.pos AS pos,
@@ -446,7 +475,8 @@ public class GraphRepository {
             WITH candidate,
                  -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END)
                    / (distanceWeight * log(1 + pathCount)) AS sampleKey
-            RETURN candidate.lemma AS lemma,
+            RETURN candidate.wordId AS wordId,
+                   candidate.lemma AS lemma,
                    candidate.reading AS reading,
                    candidate.meaning AS meaning,
                    candidate.pos AS pos,

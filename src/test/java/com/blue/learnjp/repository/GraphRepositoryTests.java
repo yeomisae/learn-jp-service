@@ -34,6 +34,8 @@ class GraphRepositoryTests {
 
         repository.mergeWord("薬局", "薬局", "やっきょく", "약국", "명사", "", "", "", "", "", "JLPT:N4", 0, "[]", "dict");
 
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("MATCH (w:Word {wordId: $wordId})"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("w.wordId = $wordId"));
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("w.bookmark = $initialBookmark"));
         verify(query).bind(GraphRepository.INITIAL_BOOKMARK);
     }

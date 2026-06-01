@@ -169,6 +169,7 @@ public class QuizService {
             String result = delta == null ? "unchanged" : delta < 0 ? "wrong" : "correct";
             Map<String, Object> current = currentWords.get(lemma);
             Integer bookmark = current != null ? intValueOrNull(current.get("bookmark")) : null;
+            String wordId = current != null ? stringValue(current.get("wordId")) : "";
             String reading = current != null ? stringValue(current.get("reading")) : "";
             String source = current != null ? stringValue(current.get("source")) : "";
             String meaning = current != null ? stringValue(current.get("meaning")) : "";
@@ -176,6 +177,7 @@ public class QuizService {
                 result = "missing";
             }
             results.add(new QuizBookmarkUpdateResponse.TargetResult(
+                wordId,
                 lemma,
                 reading,
                 source,
@@ -296,6 +298,7 @@ public class QuizService {
 
     private QuizWordSetResponse.QuizWord toQuizWord(Map<String, Object> row) {
         return new QuizWordSetResponse.QuizWord(
+            stringValue(row.get("wordId")),
             stringValue(row.get("lemma")),
             stringValue(row.get("reading")),
             stringValue(row.get("meaning")),

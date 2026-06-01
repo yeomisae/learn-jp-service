@@ -13,6 +13,7 @@ public record QuizBookmarkUpdateResponse(
     String status
 ) {
     public record TargetResult(
+        String wordId,
         String lemma,
         String reading,
         String source,

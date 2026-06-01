@@ -14,6 +14,7 @@ public record QuizWordSetResponse(
     List<QuizWord> words
 ) {
     public record QuizWord(
+        String wordId,
         String lemma,
         String reading,
         String meaning,

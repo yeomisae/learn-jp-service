@@ -31,6 +31,7 @@ class QuizServiceTests {
             true,
             true
         )).thenReturn(Optional.of(Map.of(
+            "wordId", "word-1",
             "lemma", "食べる",
             "reading", "たべる",
             "meaning", "먹다",
@@ -51,6 +52,7 @@ class QuizServiceTests {
             eq(true)
         )).thenReturn(List.of(
             Map.of(
+                "wordId", "word-2",
                 "lemma", "どうも",
                 "reading", "どうも",
                 "meaning", "아무래도",
@@ -71,6 +73,7 @@ class QuizServiceTests {
             eq(true)
         )).thenReturn(List.of(
             Map.of(
+                "wordId", "word-3",
                 "lemma", "辞書",
                 "reading", "じしょ",
                 "meaning", "사전",
@@ -94,15 +97,15 @@ class QuizServiceTests {
         assertThat(response.returnedCount()).isEqualTo(3);
         assertThat(response.requiredWord()).isEqualTo(
             new QuizWordSetResponse.QuizWord(
-                "食べる", "たべる", "먹다", "동사", "下一段他動詞", "하1단 타동사", "JLPT:N5", 1, "dict-1"
+                "word-1", "食べる", "たべる", "먹다", "동사", "下一段他動詞", "하1단 타동사", "JLPT:N5", 1, "dict-1"
             )
         );
         assertThat(response.candidateWords()).containsExactly(
             new QuizWordSetResponse.QuizWord(
-                "どうも", "どうも", "아무래도", "부사", "副詞", "부사", "JLPT:N5", 0, "dict-2"
+                "word-2", "どうも", "どうも", "아무래도", "부사", "副詞", "부사", "JLPT:N5", 0, "dict-2"
             ),
             new QuizWordSetResponse.QuizWord(
-                "辞書", "じしょ", "사전", "명사", "名詞", "명사", "JLPT:N5", 0, "dict-3"
+                "word-3", "辞書", "じしょ", "사전", "명사", "名詞", "명사", "JLPT:N5", 0, "dict-3"
             )
         );
         assertThat(response.allowDropCandidates()).isTrue();
@@ -241,8 +244,8 @@ class QuizServiceTests {
                 "薬", Map.of("lemma", "薬")
             ))
             .thenReturn(Map.of(
-                "薬局", Map.of("lemma", "薬局", "reading", "やっきょく", "source", "JLPT:N5", "meaning", "약국", "bookmark", -4),
-                "薬", Map.of("lemma", "薬", "reading", "くすり", "source", "JLPT:N5", "meaning", "약", "bookmark", -2)
+                "薬局", Map.of("wordId", "word-pharmacy", "lemma", "薬局", "reading", "やっきょく", "source", "JLPT:N5", "meaning", "약국", "bookmark", -4),
+                "薬", Map.of("wordId", "word-medicine", "lemma", "薬", "reading", "くすり", "source", "JLPT:N5", "meaning", "약", "bookmark", -2)
             ));
         when(graphRepository.adjustWordBookmarks(Map.of(
             "薬局", -1,
@@ -266,8 +269,8 @@ class QuizServiceTests {
         assertThat(response.ignoredLemmas()).isEmpty();
         assertThat(response.missingLemmas()).isEmpty();
         assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("薬局", "やっきょく", "JLPT:N5", "약국", "wrong", -4),
-            new QuizBookmarkUpdateResponse.TargetResult("薬", "くすり", "JLPT:N5", "약", "correct", -2)
+            new QuizBookmarkUpdateResponse.TargetResult("word-pharmacy", "薬局", "やっきょく", "JLPT:N5", "약국", "wrong", -4),
+            new QuizBookmarkUpdateResponse.TargetResult("word-medicine", "薬", "くすり", "JLPT:N5", "약", "correct", -2)
         );
         assertThat(response.status()).isEqualTo("ok");
     }
@@ -292,7 +295,7 @@ class QuizServiceTests {
         assertThat(response.ignoredLemmas()).isEmpty();
         assertThat(response.missingLemmas()).isEmpty();
         assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("薬局", "", "", "", "unchanged", null)
+            new QuizBookmarkUpdateResponse.TargetResult("", "薬局", "", "", "", "unchanged", null)
         );
         verify(graphRepository).adjustWordBookmarks(Map.of());
     }
@@ -323,9 +326,9 @@ class QuizServiceTests {
         assertThat(response.ignoredLemmas()).containsExactly("画面");
         assertThat(response.missingLemmas()).isEmpty();
         assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("撮る", "", "", "", "unchanged", null),
-            new QuizBookmarkUpdateResponse.TargetResult("残る", "", "", "", "unchanged", null),
-            new QuizBookmarkUpdateResponse.TargetResult("背中", "", "", "", "correct", -1)
+            new QuizBookmarkUpdateResponse.TargetResult("", "撮る", "", "", "", "unchanged", null),
+            new QuizBookmarkUpdateResponse.TargetResult("", "残る", "", "", "", "unchanged", null),
+            new QuizBookmarkUpdateResponse.TargetResult("", "背中", "", "", "", "correct", -1)
         );
     }
 
@@ -356,7 +359,7 @@ class QuizServiceTests {
         assertThat(response.ignoredLemmas()).isEmpty();
         assertThat(response.missingLemmas()).isEmpty();
         assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("食べる", "", "", "", "wrong", -4)
+            new QuizBookmarkUpdateResponse.TargetResult("", "食べる", "", "", "", "wrong", -4)
         );
     }
 
@@ -379,7 +382,7 @@ class QuizServiceTests {
         assertThat(response.appliedDeltas()).isEmpty();
         assertThat(response.missingLemmas()).containsExactly("薬局");
         assertThat(response.targetResults()).containsExactly(
-            new QuizBookmarkUpdateResponse.TargetResult("薬局", "", "", "", "missing", null)
+            new QuizBookmarkUpdateResponse.TargetResult("", "薬局", "", "", "", "missing", null)
         );
     }
 
@@ -390,6 +393,7 @@ class QuizServiceTests {
         when(graphRepository.findWordsByLemmas(List.of("食べる")))
             .thenReturn(Map.of("食べる", Map.of("lemma", "食べる")))
             .thenReturn(Map.of("食べる", Map.of(
+                "wordId", "word-eat",
                 "lemma", "食べる",
                 "reading", "たべる",
                 "source", "JLPT:N5,EXAMPLE:JLPT_EDGE_BACKFILL",
@@ -404,6 +408,7 @@ class QuizServiceTests {
             true,
             true
         )).thenReturn(Optional.of(Map.of(
+            "wordId", "word-water",
             "lemma", "水",
             "reading", "みず",
             "meaning", "물",
