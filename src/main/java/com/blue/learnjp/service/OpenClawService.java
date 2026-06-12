@@ -165,6 +165,39 @@ public class OpenClawService {
         }
     }
 
+    public String inferReading(String word) {
+        String prompt = "다음 일본어 단어의 표준 읽기를 히라가나로만 반환해줘. " +
+            "한자나 로마자는 포함하지 말고 JSON 객체만 반환해. " +
+            "예: {\"reading\":\"うみ\"}\n\n" +
+            "단어: " + word;
+
+        Map<String, Object> requestBody = chatRequest(prompt);
+
+        try {
+            String bodyJson = objectMapper.writeValueAsString(requestBody);
+            String response = callExecutor.execute("chat.completions.infer-reading", () -> postJson(bodyJson));
+
+            JsonNode root = objectMapper.readTree(response);
+            String content = root.path("choices").get(0).path("message").path("content").asText();
+
+            if (content.contains("rate limit") || content.contains("Rate limit") || content.startsWith("⚠")) {
+                throw new RateLimitException("Rate limit detected in inferReading response: " + truncate(content));
+            }
+
+            String json = extractJson(content);
+            String reading = objectMapper.readTree(json).path("reading").asText("").trim();
+            if (reading.isBlank()) {
+                throw new IllegalArgumentException("OpenClaw returned blank reading for: " + word);
+            }
+            return reading;
+        } catch (RateLimitException | RetryableExternalServiceException | CircuitBreakerOpenException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Failed to infer reading for '{}': {}", word, e.getMessage());
+            return "";
+        }
+    }
+
     private String extractJson(String content) {
         String trimmed = content.trim();
         if (trimmed.startsWith("```")) {

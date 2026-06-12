@@ -13,6 +13,62 @@ import static org.mockito.Mockito.*;
 class EnrichmentServiceTests {
 
     @Test
+    void enrichBatchUsesOpenClawReadingWhenJakoReadingIsKanji() {
+        GraphRepository graphRepository = mock(GraphRepository.class);
+        NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
+        OpenClawService openClawService = mock(OpenClawService.class);
+        ExampleQueueService exampleQueueService = mock(ExampleQueueService.class);
+
+        when(graphRepository.findWordsNeedingEnrichment(10))
+            .thenReturn(List.of(Map.of("lemma", "海", "reading", "海")))
+            .thenReturn(List.of());
+        when(jakoService.lookup("海", "海")).thenReturn(new JakoLookupResult(
+            true,
+            "海",
+            "海",
+            "바다",
+            "명사",
+            "名詞",
+            "명사",
+            "",
+            2,
+            "[]",
+            "123",
+            List.of()
+        ));
+        when(openClawService.inferReading("海")).thenReturn("うみ");
+
+        EnrichmentService service = new EnrichmentService(
+            graphRepository,
+            jakoService,
+            openClawService,
+            exampleQueueService
+        );
+
+        EnrichmentService.EnrichResult result = service.enrichBatch(2);
+
+        assertThat(result.updated()).isEqualTo(1);
+        verify(graphRepository).upsertJakoWord(
+            "海",
+            "海",
+            "海",
+            "うみ",
+            "바다",
+            "명사",
+            "名詞",
+            "명사",
+            "",
+            "",
+            "",
+            "",
+            2,
+            "[]",
+            "123"
+        );
+        verify(graphRepository, never()).markReadingBackfillUnresolved(anyString());
+    }
+
+    @Test
     void backfillJlptExampleEdgesEnqueuesJakoExamplesForOneWord() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);

@@ -3,6 +3,7 @@ package com.blue.learnjp.service;
 import com.blue.learnjp.config.QuizHistoryConfig;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
 import com.blue.learnjp.dto.QuizHistoryDailyResponse;
+import com.blue.learnjp.repository.GraphRepository;
 import com.blue.learnjp.repository.QuizHistoryRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -14,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class QuizHistoryServiceTests {
 
@@ -55,4 +58,36 @@ class QuizHistoryServiceTests {
         assertThat(report.mustCopyReport()).contains("✅ 맞은 단어");
         assertThat(report.mustCopyReport()).contains("❌ 틀린 단어");
     }
+
+    @Test
+    void dailyReportPrefersCurrentWordReadingOverHistorySnapshot() {
+        QuizHistoryRepository repository = new QuizHistoryRepository(
+            new QuizHistoryConfig(tempDir.resolve("quiz-history.sqlite").toString())
+        );
+        repository.initialize();
+        GraphRepository graphRepository = mock(GraphRepository.class);
+        when(graphRepository.findWordsByWordIds(List.of("word-sea")))
+            .thenReturn(Map.of("word-sea", Map.of("reading", "うみ")));
+        QuizHistoryService service = new QuizHistoryService(repository, graphRepository);
+
+        service.record(new QuizBookmarkUpdateResponse(
+            1,
+            Map.of("word-sea", 1),
+            Map.of(),
+            List.of(),
+            List.of(),
+            List.of(new QuizBookmarkUpdateResponse.TargetResult(
+                "word-sea", "海", "海", "JLPT:N5", "바다", "correct", -2
+            )),
+            "ok"
+        ));
+
+        QuizHistoryDailyResponse report = service.dailyReport(
+            LocalDate.now(ZoneId.of("Asia/Seoul")),
+            ZoneId.of("Asia/Seoul")
+        );
+
+        assertThat(report.correctLines()).containsExactly("• 海(うみ): N5, 바다 (-2)");
+    }
+
 }

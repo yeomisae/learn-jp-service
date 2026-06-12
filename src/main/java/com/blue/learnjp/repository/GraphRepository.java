@@ -182,6 +182,12 @@ public class GraphRepository {
         return neo4jClient.query("""
             MATCH (w:Word)
             WHERE w.dictEntryId IS NULL OR w.dictEntryId = ''
+               OR trim(coalesce(w.reading, '')) = ''
+               OR (
+                    trim(coalesce(w.reading, '')) = w.lemma
+                    AND w.lemma =~ '.*[一-龯々〆ヵヶ].*'
+                    AND coalesce(w.readingBackfillStatus, '') <> 'UNRESOLVED'
+                  )
             RETURN w.lemma AS lemma, w.reading AS reading, w.meaning AS meaning, w.pos AS pos,
                    w.synonyms AS synonyms, w.antonyms AS antonyms,
                    w.description AS description
@@ -362,7 +368,13 @@ public class GraphRepository {
               AND NOT w.lemma CONTAINS '～'
               AND NOT w.lemma STARTS WITH 'n-'
               AND NOT w.lemma =~ '.*[0-9０-９].*'
-              AND (NOT $requireReading OR trim(coalesce(w.reading, '')) <> '')
+              AND (NOT $requireReading OR (
+                    trim(coalesce(w.reading, '')) <> ''
+                    AND NOT (
+                      trim(coalesce(w.reading, '')) = w.lemma
+                      AND w.lemma =~ '.*[一-龯々〆ヵヶ].*'
+                    )
+                  ))
               AND (NOT $requireMeaning OR trim(coalesce(w.meaning, '')) <> '')
               AND (NOT $requireDictEntry OR (
                     trim(coalesce(w.dictEntryId, '')) <> ''
@@ -418,7 +430,13 @@ public class GraphRepository {
               AND NOT w.lemma CONTAINS '～'
               AND NOT w.lemma STARTS WITH 'n-'
               AND NOT w.lemma =~ '.*[0-9０-９].*'
-              AND (NOT $requireReading OR trim(coalesce(w.reading, '')) <> '')
+              AND (NOT $requireReading OR (
+                    trim(coalesce(w.reading, '')) <> ''
+                    AND NOT (
+                      trim(coalesce(w.reading, '')) = w.lemma
+                      AND w.lemma =~ '.*[一-龯々〆ヵヶ].*'
+                    )
+                  ))
               AND (NOT $requireMeaning OR trim(coalesce(w.meaning, '')) <> '')
               AND (NOT $requireDictEntry OR (
                     trim(coalesce(w.dictEntryId, '')) <> ''
@@ -482,7 +500,13 @@ public class GraphRepository {
               AND NOT candidate.lemma CONTAINS '～'
               AND NOT candidate.lemma STARTS WITH 'n-'
               AND NOT candidate.lemma =~ '.*[0-9０-９].*'
-              AND (NOT $requireReading OR trim(coalesce(candidate.reading, '')) <> '')
+              AND (NOT $requireReading OR (
+                    trim(coalesce(candidate.reading, '')) <> ''
+                    AND NOT (
+                      trim(coalesce(candidate.reading, '')) = candidate.lemma
+                      AND candidate.lemma =~ '.*[一-龯々〆ヵヶ].*'
+                    )
+                  ))
               AND (NOT $requireMeaning OR trim(coalesce(candidate.meaning, '')) <> '')
               AND (NOT $requireDictEntry OR (
                     trim(coalesce(candidate.dictEntryId, '')) <> ''
@@ -750,6 +774,17 @@ public class GraphRepository {
      */
     public void markDictNotFound(String lemma) {
         neo4jClient.query("MATCH (w:Word {lemma: $lemma}) SET w.dictEntryId = 'NOT_FOUND'")
+            .bind(lemma).to("lemma")
+            .run();
+    }
+
+    public void markReadingBackfillUnresolved(String lemma) {
+        neo4jClient.query("""
+            MATCH (w:Word {lemma: $lemma})
+            SET w.readingBackfillStatus = 'UNRESOLVED',
+                w.readingBackfillAttemptedAt = datetime(),
+                w.updatedAt = datetime()
+            """)
             .bind(lemma).to("lemma")
             .run();
     }

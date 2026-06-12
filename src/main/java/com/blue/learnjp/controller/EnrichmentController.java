@@ -31,6 +31,12 @@ public class EnrichmentController {
         return ResponseEntity.ok(enrichmentService.enrichBatch(batches));
     }
 
+    @PostMapping("/enrich/reading")
+    public ResponseEntity<EnrichmentService.ReadingEnrichResult> enrichReadings(
+            @RequestParam(defaultValue = "") String lemmas) {
+        return ResponseEntity.ok(enrichmentService.enrichReadings(lemmas));
+    }
+
     /**
      * GET /api/words/enrich/status
      * 품질 보완이 필요한 Word 노드 수를 반환한다.

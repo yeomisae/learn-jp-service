@@ -3,12 +3,15 @@ package com.blue.learnjp.service;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
 import com.blue.learnjp.dto.QuizHistoryDailyResponse;
 import com.blue.learnjp.dto.QuizHistoryEntry;
+import com.blue.learnjp.repository.GraphRepository;
 import com.blue.learnjp.repository.QuizHistoryRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.Map;
 import java.util.List;
 import java.util.UUID;
 
@@ -18,9 +21,16 @@ public class QuizHistoryService {
     private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Seoul");
 
     private final QuizHistoryRepository repository;
+    private final GraphRepository graphRepository;
 
     public QuizHistoryService(QuizHistoryRepository repository) {
+        this(repository, null);
+    }
+
+    @Autowired
+    public QuizHistoryService(QuizHistoryRepository repository, GraphRepository graphRepository) {
         this.repository = repository;
+        this.graphRepository = graphRepository;
     }
 
     public int record(QuizBookmarkUpdateResponse response) {
@@ -40,7 +50,7 @@ public class QuizHistoryService {
         Instant start = effectiveDate.atStartOfDay(effectiveZone).toInstant();
         Instant end = effectiveDate.plusDays(1).atStartOfDay(effectiveZone).toInstant();
 
-        List<QuizHistoryEntry> entries = repository.findByPeriod(start, end);
+        List<QuizHistoryEntry> entries = withCurrentWordReadings(repository.findByPeriod(start, end));
         List<QuizHistoryEntry> correctWords = entries.stream()
             .filter(entry -> "correct".equals(entry.result()))
             .toList();
@@ -77,6 +87,45 @@ public class QuizHistoryService {
         return String.join("\n", lines);
     }
 
+    private List<QuizHistoryEntry> withCurrentWordReadings(List<QuizHistoryEntry> entries) {
+        if (graphRepository == null || entries == null || entries.isEmpty()) {
+            return entries;
+        }
+        List<String> wordIds = entries.stream()
+            .map(QuizHistoryEntry::wordId)
+            .filter(wordId -> wordId != null && !wordId.isBlank())
+            .distinct()
+            .toList();
+        if (wordIds.isEmpty()) {
+            return entries;
+        }
+        Map<String, Map<String, Object>> currentWords = graphRepository.findWordsByWordIds(wordIds);
+        return entries.stream()
+            .map(entry -> withCurrentWordReading(entry, currentWords.get(entry.wordId())))
+            .toList();
+    }
+
+    private QuizHistoryEntry withCurrentWordReading(QuizHistoryEntry entry, Map<String, Object> currentWord) {
+        if (currentWord == null) {
+            return entry;
+        }
+        String currentReading = stringValue(currentWord.get("reading"));
+        if (currentReading.isBlank() || currentReading.equals(entry.reading())) {
+            return entry;
+        }
+        return new QuizHistoryEntry(
+            entry.id(),
+            entry.occurredAt(),
+            entry.wordId(),
+            entry.lemma(),
+            currentReading,
+            entry.source(),
+            entry.meaning(),
+            entry.result(),
+            entry.bookmark()
+        );
+    }
+
     private String formatLine(QuizHistoryEntry entry) {
         StringBuilder text = new StringBuilder("• ").append(entry.lemma());
         if (entry.reading() != null && !entry.reading().isBlank()
@@ -90,6 +139,10 @@ public class QuizHistoryService {
         }
         text.append(" (").append(entry.bookmark() != null ? entry.bookmark() : "-").append(")");
         return text.toString();
+    }
+
+    private String stringValue(Object value) {
+        return value != null ? value.toString().trim() : "";
     }
 
     private String displaySource(String source) {

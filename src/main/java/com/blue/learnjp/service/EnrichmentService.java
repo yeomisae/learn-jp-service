@@ -42,6 +42,7 @@ public class EnrichmentService {
     }
 
     public record EnrichResult(int updated, int batchesRequested, String status, String error) {}
+    public record ReadingEnrichResult(int updated, List<String> attemptedLemmas, String status, String error) {}
     public record JlptExampleBackfillResult(
         int lookedUpWords,
         int examplesEnqueued,
@@ -76,12 +77,16 @@ public class EnrichmentService {
                     JakoLookupResult jako = jakoService.lookup(lemma, reading);
 
                     if (jako.found()) {
+                        String resolvedReading = resolveReading(lemma, jako.reading());
                         graphRepository.upsertJakoWord(
                             lemma, jako.resolvedLemma(), jako.resolvedLemma(),
-                            jako.reading(), jako.meaning(), jako.pos(), jako.posDetail(), jako.posDesc(),
+                            resolvedReading, jako.meaning(), jako.pos(), jako.posDetail(), jako.posDesc(),
                             "", jako.antonyms(), "",
                             "", jako.starGrade(), jako.conjugations(), jako.dictEntryId()
                         );
+                        if (isBadReading(lemma, resolvedReading)) {
+                            graphRepository.markReadingBackfillUnresolved(jako.resolvedLemma());
+                        }
                         totalUpdated++;
                         log.debug("Enriched '{}' (resolved={})", lemma, jako.resolvedLemma());
                     } else {
@@ -191,6 +196,93 @@ public class EnrichmentService {
 
         log.info("Enrichment finished. Total updated: {}", totalUpdated);
         return new EnrichResult(totalUpdated, batchCount, "ok", null);
+    }
+
+    public ReadingEnrichResult enrichReadings(String lemmasCsv) {
+        List<String> lemmas = normalizeCsv(lemmasCsv);
+        if (lemmas.isEmpty()) {
+            return new ReadingEnrichResult(0, List.of(), "ok", null);
+        }
+
+        Map<String, Map<String, Object>> words = graphRepository.findWordsByLemmas(lemmas);
+        int updated = 0;
+        List<String> attempted = new ArrayList<>();
+        for (String lemma : lemmas) {
+            Map<String, Object> word = words.get(lemma);
+            if (word == null) {
+                continue;
+            }
+            String reading = stringValue(word.get("reading"));
+            try {
+                JakoLookupResult jako = jakoService.lookup(lemma, reading);
+                if (!jako.found()) {
+                    continue;
+                }
+                String resolvedReading = resolveReading(lemma, jako.reading());
+                graphRepository.upsertJakoWord(
+                    lemma, jako.resolvedLemma(), jako.resolvedLemma(),
+                    resolvedReading, jako.meaning(), jako.pos(), jako.posDetail(), jako.posDesc(),
+                    "", jako.antonyms(), "",
+                    "", jako.starGrade(), jako.conjugations(), jako.dictEntryId()
+                );
+                if (isBadReading(lemma, resolvedReading)) {
+                    graphRepository.markReadingBackfillUnresolved(jako.resolvedLemma());
+                }
+                attempted.add(lemma);
+                updated++;
+            } catch (RateLimitException | RetryableExternalServiceException | CircuitBreakerOpenException e) {
+                return new ReadingEnrichResult(updated, List.copyOf(attempted), "paused", e.getMessage());
+            }
+        }
+        return new ReadingEnrichResult(updated, List.copyOf(attempted), "ok", null);
+    }
+
+    private String resolveReading(String lemma, String reading) {
+        if (!isBadReading(lemma, reading)) {
+            return reading != null ? reading : "";
+        }
+
+        String inferred = openClawService.inferReading(lemma);
+        if (!isBadReading(lemma, inferred)) {
+            log.info("Enrichment: reading fallback '{}' → '{}'", lemma, inferred);
+            return inferred;
+        }
+        log.warn("Enrichment: reading unresolved for '{}' (jako='{}', inferred='{}')", lemma, reading, inferred);
+        return reading != null ? reading : "";
+    }
+
+    private List<String> normalizeCsv(String csv) {
+        if (csv == null || csv.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(csv.split(","))
+            .map(String::trim)
+            .filter(value -> !value.isBlank())
+            .distinct()
+            .toList();
+    }
+
+    private boolean isBadReading(String lemma, String reading) {
+        String normalizedReading = reading != null ? reading.trim() : "";
+        return lemma != null && !lemma.isBlank()
+            && (normalizedReading.isBlank()
+                || (normalizedReading.equals(lemma) && containsKanji(lemma))
+                || containsKanji(normalizedReading));
+    }
+
+    private boolean containsKanji(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            Character.UnicodeBlock block = Character.UnicodeBlock.of(text.charAt(i));
+            if (block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                || block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
