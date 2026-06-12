@@ -7,6 +7,7 @@ import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
+import com.blue.learnjp.repository.UserWordStateRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 public class QuizService {
@@ -31,35 +33,51 @@ public class QuizService {
     private static final boolean ALLOW_DROP_CANDIDATES = true;
     private static final int MAX_CANDIDATE_WORDS_TO_USE = 1;
     private static final int MAX_EXTRA_CONTENT_WORDS = 2;
+    private static final int TARGET_SAMPLE_LIMIT = 500;
+    private static final int MIN_CANDIDATE_SAMPLE_LIMIT = 50;
+    private static final int CANDIDATE_SAMPLE_MULTIPLIER = 20;
 
     private final GraphRepository graphRepository;
     private final NaverJakoDictionaryService jakoService;
     private final QuizHistoryService quizHistoryService;
+    private final UserWordStateRepository userWordStateRepository;
 
     @Autowired
     public QuizService(GraphRepository graphRepository, NaverJakoDictionaryService jakoService,
-                       QuizHistoryService quizHistoryService) {
+                       QuizHistoryService quizHistoryService, UserWordStateRepository userWordStateRepository) {
         this.graphRepository = graphRepository;
         this.jakoService = jakoService;
         this.quizHistoryService = quizHistoryService;
+        this.userWordStateRepository = userWordStateRepository;
     }
 
     public QuizService(GraphRepository graphRepository, NaverJakoDictionaryService jakoService) {
         this.graphRepository = graphRepository;
         this.jakoService = jakoService;
         this.quizHistoryService = null;
+        this.userWordStateRepository = null;
+    }
+
+    public QuizService(GraphRepository graphRepository, NaverJakoDictionaryService jakoService,
+                       UserWordStateRepository userWordStateRepository) {
+        this.graphRepository = graphRepository;
+        this.jakoService = jakoService;
+        this.quizHistoryService = null;
+        this.userWordStateRepository = userWordStateRepository;
     }
 
     public QuizWordSetResponse createWordSet(QuizWordSetRequest request) {
         NormalizedRequest normalized = normalize(request);
 
-        Map<String, Object> targetRow = graphRepository.findQuizTargetBySources(
+        List<Map<String, Object>> targetRows = graphRepository.findQuizTargetCandidatesBySources(
             normalized.sources(),
             normalized.excludeLemmas(),
+            TARGET_SAMPLE_LIMIT,
             normalized.requireReading(),
             normalized.requireMeaning(),
             normalized.requireDictEntry()
-        ).orElse(null);
+        );
+        Map<String, Object> targetRow = selectWeighted(targetRows, true);
 
         if (targetRow == null) {
             return new QuizWordSetResponse(
@@ -77,6 +95,7 @@ public class QuizService {
 
         QuizWordSetResponse.QuizWord requiredWord = toQuizWord(targetRow);
         int candidateLimit = Math.max(0, normalized.count() - 1);
+        int candidateSampleLimit = candidateSampleLimit(candidateLimit);
         List<String> candidateExcludes = withAdditionalExcludes(
             normalized.excludeLemmas(),
             List.of(requiredWord.lemma())
@@ -86,13 +105,13 @@ public class QuizService {
             requiredWord.lemma(),
             normalized.sources(),
             candidateExcludes,
-            candidateLimit,
+            candidateSampleLimit,
             normalized.requireReading(),
             normalized.requireMeaning(),
             normalized.requireDictEntry()
         );
 
-        List<QuizWordSetResponse.QuizWord> candidateWords = candidateRows.stream()
+        List<QuizWordSetResponse.QuizWord> candidateWords = selectWeightedMany(candidateRows, candidateLimit, true).stream()
             .map(this::toQuizWord)
             .toList();
 
@@ -104,13 +123,13 @@ public class QuizService {
             List<Map<String, Object>> fallbackRows = graphRepository.findQuizWordsBySources(
                 normalized.sources(),
                 fallbackExcludes,
-                candidateLimit - candidateWords.size(),
+                candidateSampleLimit(candidateLimit - candidateWords.size()),
                 normalized.requireReading(),
                 normalized.requireMeaning(),
                 normalized.requireDictEntry()
             );
             List<QuizWordSetResponse.QuizWord> mergedCandidates = new ArrayList<>(candidateWords);
-            fallbackRows.stream()
+            selectWeightedMany(fallbackRows, candidateLimit - candidateWords.size(), false).stream()
                 .map(this::toQuizWord)
                 .filter(word -> !word.lemma().equals(requiredWord.lemma()))
                 .forEach(mergedCandidates::add);
@@ -172,6 +191,94 @@ public class QuizService {
         );
     }
 
+    private int candidateSampleLimit(int requested) {
+        if (requested <= 0) {
+            return 0;
+        }
+        return Math.max(MIN_CANDIDATE_SAMPLE_LIMIT, requested * CANDIDATE_SAMPLE_MULTIPLIER);
+    }
+
+    private Map<String, Object> selectWeighted(List<Map<String, Object>> rows, boolean includeGraphWeight) {
+        List<Map<String, Object>> selected = selectWeightedMany(rows, 1, includeGraphWeight);
+        return selected.isEmpty() ? null : selected.getFirst();
+    }
+
+    private List<Map<String, Object>> selectWeightedMany(List<Map<String, Object>> rows, int limit,
+                                                         boolean includeGraphWeight) {
+        if (rows == null || rows.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        List<Map<String, Object>> remaining = new ArrayList<>(rows);
+        List<Map<String, Object>> selected = new ArrayList<>();
+        while (!remaining.isEmpty() && selected.size() < limit) {
+            Map<String, Integer> bookmarks = findBookmarks(wordIdsFrom(remaining));
+            Map<String, Object> row = drawWeighted(remaining, bookmarks, includeGraphWeight);
+            if (row == null) {
+                break;
+            }
+            selected.add(row);
+            remaining.remove(row);
+        }
+        return List.copyOf(selected);
+    }
+
+    private Map<String, Object> drawWeighted(List<Map<String, Object>> rows, Map<String, Integer> bookmarks,
+                                             boolean includeGraphWeight) {
+        double total = 0.0;
+        for (Map<String, Object> row : rows) {
+            total += rowWeight(row, bookmarks, includeGraphWeight);
+        }
+        if (total <= 0.0) {
+            return rows.get(ThreadLocalRandom.current().nextInt(rows.size()));
+        }
+        double point = ThreadLocalRandom.current().nextDouble(total);
+        double seen = 0.0;
+        for (Map<String, Object> row : rows) {
+            seen += rowWeight(row, bookmarks, includeGraphWeight);
+            if (point < seen) {
+                return row;
+            }
+        }
+        return rows.getLast();
+    }
+
+    private double rowWeight(Map<String, Object> row, Map<String, Integer> bookmarks, boolean includeGraphWeight) {
+        int bookmark = bookmarks.getOrDefault(stringValue(row.get("wordId")), UserWordStateRepository.INITIAL_BOOKMARK);
+        double graphWeight = includeGraphWeight ? doubleValue(row.get("graphWeight"), 1.0) : 1.0;
+        return Math.max(0.000001, graphWeight * bookmarkWeight(bookmark));
+    }
+
+    private double bookmarkWeight(int bookmark) {
+        if (bookmark <= -3) return 6.0;
+        if (bookmark == -2) return 5.0;
+        if (bookmark == -1) return 4.0;
+        if (bookmark == 0) return 3.0;
+        if (bookmark == 1) return 2.0;
+        return 1.0;
+    }
+
+    private List<String> wordIdsFrom(List<Map<String, Object>> rows) {
+        return rows.stream()
+            .map(row -> stringValue(row.get("wordId")))
+            .filter(wordId -> !wordId.isBlank())
+            .distinct()
+            .toList();
+    }
+
+    private Map<String, Integer> findBookmarks(List<String> wordIds) {
+        if (wordIds == null || wordIds.isEmpty() || userWordStateRepository == null) {
+            return Map.of();
+        }
+        return userWordStateRepository.findBookmarks(wordIds);
+    }
+
+    private int adjustUserWordBookmarks(Map<String, Integer> updatableDeltas) {
+        if (userWordStateRepository == null) {
+            return updatableDeltas != null ? updatableDeltas.size() : 0;
+        }
+        return userWordStateRepository.adjustBookmarks(updatableDeltas);
+    }
+
     private List<String> withAdditionalExcludes(List<String> base, List<String> additional) {
         LinkedHashSet<String> excludes = new LinkedHashSet<>();
         if (base != null) {
@@ -190,6 +297,7 @@ public class QuizService {
         List<String> targetWordIds,
         Map<String, Integer> appliedDeltas,
         Map<String, Map<String, Object>> currentWords,
+        Map<String, Integer> bookmarks,
         List<String> missingWordIds
     ) {
         if (targetWordIds == null || targetWordIds.isEmpty()) {
@@ -202,7 +310,7 @@ public class QuizService {
             Integer delta = appliedDeltas.get(targetWordId);
             String result = delta == null ? "unchanged" : delta < 0 ? "wrong" : "correct";
             Map<String, Object> current = currentWords.get(targetWordId);
-            Integer bookmark = current != null ? intValueOrNull(current.get("bookmark")) : null;
+            Integer bookmark = current != null ? bookmarks.getOrDefault(targetWordId, UserWordStateRepository.INITIAL_BOOKMARK) : null;
             String wordId = current != null ? stringValue(current.get("wordId")) : "";
             String lemma = current != null ? stringValue(current.get("lemma")) : "";
             String reading = current != null ? stringValue(current.get("reading")) : "";
@@ -325,17 +433,18 @@ public class QuizService {
             throw new IllegalArgumentException("Unknown targetWordIds: " + String.join(",", new LinkedHashSet<>(missingWordIds)));
         }
 
-        int updatedCount = graphRepository.adjustWordBookmarksByWordId(updatableDeltas);
+        int updatedCount = adjustUserWordBookmarks(updatableDeltas);
         Map<String, Map<String, Object>> currentWords = resolution.targetWordIds().isEmpty()
             ? Map.of()
             : graphRepository.findWordsByWordIds(resolution.targetWordIds());
+        Map<String, Integer> currentBookmarks = findBookmarks(resolution.targetWordIds());
         QuizBookmarkUpdateResponse response = new QuizBookmarkUpdateResponse(
             updatedCount,
             Map.copyOf(updatableDeltas),
             resolution.resolvedMappings(),
             resolution.ignoredLemmas(),
             List.of(),
-            buildTargetResults(resolution.targetWordIds(), updatableDeltas, currentWords, List.of()),
+            buildTargetResults(resolution.targetWordIds(), updatableDeltas, currentWords, currentBookmarks, List.of()),
             "ok"
         );
         log.info(
@@ -581,6 +690,16 @@ public class QuizService {
             return Integer.parseInt(text);
         }
         return null;
+    }
+
+    private double doubleValue(Object value, double defaultValue) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Double.parseDouble(text);
+        }
+        return defaultValue;
     }
 
     private record NormalizedRequest(

@@ -1,6 +1,7 @@
 package com.blue.learnjp.service;
 
 import com.blue.learnjp.config.GoogleSheetsConfig;
+import com.blue.learnjp.repository.UserWordStateRepository;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
 import com.google.api.services.sheets.v4.Sheets;
@@ -34,10 +35,13 @@ public class GoogleSheetsService {
     private final GoogleSheetsConfig config;
     private final Sheets sheetsClient;
     private final Neo4jClient neo4jClient;
+    private final UserWordStateRepository userWordStateRepository;
 
-    public GoogleSheetsService(GoogleSheetsConfig config, Neo4jClient neo4jClient) {
+    public GoogleSheetsService(GoogleSheetsConfig config, Neo4jClient neo4jClient,
+                               UserWordStateRepository userWordStateRepository) {
         this.config = config;
         this.neo4jClient = neo4jClient;
+        this.userWordStateRepository = userWordStateRepository;
         this.sheetsClient = buildSheetsClient(config.credentialsPath());
     }
 
@@ -56,7 +60,7 @@ public class GoogleSheetsService {
         String jlptId = spreadsheets.get("jlpt");
         if (jlptId != null && !jlptId.isEmpty()) {
             Collection<Map<String, Object>> jlptWords = neo4jClient.query(
-                "MATCH (w:Word) WHERE w.source CONTAINS 'JLPT' RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
+                "MATCH (w:Word) WHERE w.source CONTAINS 'JLPT' RETURN w.wordId AS wordId, w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
             ).fetch().all();
             writeToSheet(jlptId, jlptWords);
             total += jlptWords.size();
@@ -67,7 +71,7 @@ public class GoogleSheetsService {
         String newsId = spreadsheets.get("news");
         if (newsId != null && !newsId.isEmpty()) {
             Collection<Map<String, Object>> newsWords = neo4jClient.query(
-                "MATCH (w:Word) WHERE w.source CONTAINS 'NEWS' RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
+                "MATCH (w:Word) WHERE w.source CONTAINS 'NEWS' RETURN w.wordId AS wordId, w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
             ).fetch().all();
             writeToSheet(newsId, newsWords);
             total += newsWords.size();
@@ -78,7 +82,7 @@ public class GoogleSheetsService {
         String defaultId = spreadsheets.get("default");
         if (defaultId != null && !defaultId.isEmpty()) {
             Collection<Map<String, Object>> defaultWords = neo4jClient.query(
-                "MATCH (w:Word) WHERE NOT w.source CONTAINS 'JLPT' AND NOT w.source CONTAINS 'NEWS' RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
+                "MATCH (w:Word) WHERE NOT w.source CONTAINS 'JLPT' AND NOT w.source CONTAINS 'NEWS' RETURN w.wordId AS wordId, w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
             ).fetch().all();
             writeToSheet(defaultId, defaultWords);
             total += defaultWords.size();
@@ -90,7 +94,7 @@ public class GoogleSheetsService {
 
     private int exportAll(String spreadsheetId) {
         Collection<Map<String, Object>> words = neo4jClient.query(
-            "MATCH (w:Word) RETURN w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.bookmark AS bookmark, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
+            "MATCH (w:Word) RETURN w.wordId AS wordId, w.lemma AS lemma, w.meaning AS meaning, w.pos AS pos, w.posDesc AS posDesc, w.reading AS reading, w.synonyms AS synonyms, w.antonyms AS antonyms, w.description AS description, w.image AS image, w.createdAt AS createdAt ORDER BY w.createdAt"
         ).fetch().all();
         writeToSheet(spreadsheetId, words);
         log.info("Exported {} words to single spreadsheet", words.size());
@@ -120,6 +124,11 @@ public class GoogleSheetsService {
         List<List<Object>> data = new ArrayList<>();
 
         data.add(List.of("W", "M", "POS", "P", "S", "A", "D", "B", "I", "C"));
+        Map<String, Integer> bookmarks = userWordStateRepository.findBookmarks(words.stream()
+            .map(word -> nullSafe(word.get("wordId")))
+            .filter(wordId -> !wordId.isBlank())
+            .distinct()
+            .toList());
 
         for (Map<String, Object> word : words) {
             String createdAt = "";
@@ -130,7 +139,10 @@ public class GoogleSheetsService {
                 createdAt = raw.toString();
             }
 
-            Object bookmarkVal = word.get("bookmark");
+            Object bookmarkVal = bookmarks.getOrDefault(
+                nullSafe(word.get("wordId")),
+                UserWordStateRepository.INITIAL_BOOKMARK
+            );
             String bookmark = normalizeBookmarkForSheet(bookmarkVal);
 
             // POS: posDesc 우선, 없으면 pos 원본

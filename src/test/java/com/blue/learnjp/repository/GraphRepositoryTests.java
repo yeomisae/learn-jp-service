@@ -16,7 +16,7 @@ import static org.mockito.Mockito.*;
 class GraphRepositoryTests {
 
     @Test
-    void mergeWordInitializesBookmarkToNegativeThree() {
+    void mergeWordInitializesLegacyBookmarkToZero() {
         Neo4jClient neo4jClient = mock(Neo4jClient.class);
         @SuppressWarnings("unchecked")
         Neo4jClient.RecordFetchSpec<Map<String, Object>> fetch = mock(Neo4jClient.RecordFetchSpec.class);
@@ -27,7 +27,7 @@ class GraphRepositoryTests {
         when(query.bind(any())).thenReturn(bind);
         when(bind.to(anyString())).thenReturn(query);
         when(query.fetch()).thenReturn(fetch);
-        when(fetch.first()).thenReturn(Optional.empty());
+        when(fetch.all()).thenReturn(List.of());
         when(neo4jClient.query(anyString())).thenReturn(query);
 
         GraphRepository repository = new GraphRepository(neo4jClient);
@@ -37,7 +37,7 @@ class GraphRepositoryTests {
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("MATCH (w:Word {wordId: $wordId})"));
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("w.wordId = $wordId"));
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("w.bookmark = $initialBookmark"));
-        verify(query).bind(GraphRepository.INITIAL_BOOKMARK);
+        assertThat(GraphRepository.INITIAL_BOOKMARK).isZero();
     }
 
     @Test
@@ -193,7 +193,31 @@ class GraphRepositoryTests {
     }
 
     @Test
-    void findQuizWordsBySourcesUsesBookmarkWeightedSampling() {
+    void findWordsNeedingEnrichmentIncludesKanjiWordsWhoseReadingEqualsLemma() {
+        Neo4jClient neo4jClient = mock(Neo4jClient.class);
+        @SuppressWarnings("unchecked")
+        Neo4jClient.RecordFetchSpec<Map<String, Object>> fetch = mock(Neo4jClient.RecordFetchSpec.class);
+        Neo4jClient.UnboundRunnableSpec query = mock(Neo4jClient.UnboundRunnableSpec.class);
+        @SuppressWarnings("unchecked")
+        Neo4jClient.OngoingBindSpec<Object, Neo4jClient.RunnableSpec> bind = mock(Neo4jClient.OngoingBindSpec.class);
+
+        when(query.bind(any())).thenReturn(bind);
+        when(bind.to(anyString())).thenReturn(query);
+        when(query.fetch()).thenReturn(fetch);
+        when(fetch.all()).thenReturn(List.of());
+        when(neo4jClient.query(anyString())).thenReturn(query);
+
+        GraphRepository repository = new GraphRepository(neo4jClient);
+
+        repository.findWordsNeedingEnrichment(20);
+
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("trim(coalesce(w.reading, '')) = w.lemma"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("w.lemma =~ '.*[一-龯々〆ヵヶ].*'"));
+        verify(query).bind(20);
+    }
+
+    @Test
+    void findQuizWordsBySourcesReturnsRandomCandidatesWithoutNeo4jBookmarkWeight() {
         Neo4jClient neo4jClient = mock(Neo4jClient.class);
         @SuppressWarnings("unchecked")
         Neo4jClient.RecordFetchSpec<Map<String, Object>> fetch = mock(Neo4jClient.RecordFetchSpec.class);
@@ -218,9 +242,8 @@ class GraphRepositoryTests {
             true
         );
 
-        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ORDER BY sampleKey"));
-        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("WHEN bookmarkValue <= -3 THEN 6.0"));
-        verify(query).bind(GraphRepository.INITIAL_BOOKMARK);
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ORDER BY rand()"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("trim(coalesce(w.reading, '')) = w.lemma"));
     }
 
     @Test
@@ -235,7 +258,7 @@ class GraphRepositoryTests {
         when(query.bind(any())).thenReturn(bind);
         when(bind.to(anyString())).thenReturn(query);
         when(query.fetch()).thenReturn(fetch);
-        when(fetch.first()).thenReturn(Optional.empty());
+        when(fetch.all()).thenReturn(List.of());
         when(neo4jClient.query(anyString())).thenReturn(query);
 
         GraphRepository repository = new GraphRepository(neo4jClient);
@@ -248,10 +271,10 @@ class GraphRepositoryTests {
             true
         );
 
-        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ORDER BY sampleKey"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ORDER BY rand()"));
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("NOT w.lemma CONTAINS '～'"));
-        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("LIMIT 1"));
-        verify(query).bind(GraphRepository.INITIAL_BOOKMARK);
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("trim(coalesce(w.reading, '')) = w.lemma"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("LIMIT $limit"));
     }
 
     @Test
@@ -284,7 +307,9 @@ class GraphRepositoryTests {
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("[:CO_OCCURS*1..2]"));
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("WHEN 1 THEN 1.0"));
         verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ELSE 0.35"));
-        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ORDER BY sampleKey"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("graphWeight"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("ORDER BY rand()"));
+        verify(neo4jClient).query(org.mockito.ArgumentMatchers.contains("trim(coalesce(candidate.reading, '')) = candidate.lemma"));
         verify(query).bind("食べる");
         verify(query).bind(9);
     }

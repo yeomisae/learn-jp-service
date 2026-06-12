@@ -22,7 +22,7 @@ import java.util.*;
  *   <li>synonyms    — 일본어 유의어 (쉼표 구분)</li>
  *   <li>antonyms    — 일본어 반의어 (쉼표 구분)</li>
  *   <li>description — 한국어 설명 (한 줄)</li>
- *   <li>bookmark    — 학습 상태 점수 (기본 -3, 음수: 헷갈림, 0: 미표시, 양수: 익숙함)</li>
+ *   <li>bookmark    — Google Sheets 호환용 legacy 컬럼. 사용자 점수 SSOT는 SQLite user_word_state</li>
  *   <li>image       — 이미지 URL</li>
  *   <li>source      — 등록 출처 (쉼표 구분 누적: JLPT, NEWS, MANUAL, ANIME 등)</li>
  *   <li>starGrade   — 빈도 기반 난이도 (0~2+, 네이버 사전 priority)</li>
@@ -35,7 +35,7 @@ import java.util.*;
 @Repository
 public class GraphRepository {
 
-    static final int INITIAL_BOOKMARK = -3;
+    static final int INITIAL_BOOKMARK = 0;
     private static final int WORD_ID_GENERATION_ATTEMPTS = 5;
 
     private final Neo4jClient neo4jClient;
@@ -312,11 +312,9 @@ public class GraphRepository {
             RETURN w.wordId AS wordId, w.lemma AS lemma,
                    w.reading AS reading, w.meaning AS meaning, w.pos AS pos,
                    w.synonyms AS synonyms, w.antonyms AS antonyms,
-                   w.description AS description, w.surface AS surface, w.source AS source,
-                   coalesce(w.bookmark, $initialBookmark) AS bookmark
+                   w.description AS description, w.surface AS surface, w.source AS source
             """)
             .bind(lemmas).to("lemmas")
-            .bind(INITIAL_BOOKMARK).to("initialBookmark")
             .fetch().all();
 
         Map<String, Map<String, Object>> result = new HashMap<>();
@@ -336,11 +334,9 @@ public class GraphRepository {
             RETURN w.wordId AS wordId, w.lemma AS lemma,
                    w.reading AS reading, w.meaning AS meaning, w.pos AS pos,
                    w.synonyms AS synonyms, w.antonyms AS antonyms,
-                   w.description AS description, w.surface AS surface, w.source AS source,
-                   coalesce(w.bookmark, $initialBookmark) AS bookmark
+                   w.description AS description, w.surface AS surface, w.source AS source
             """)
             .bind(wordIds).to("wordIds")
-            .bind(INITIAL_BOOKMARK).to("initialBookmark")
             .fetch().all();
 
         Map<String, Map<String, Object>> result = new HashMap<>();
@@ -361,8 +357,7 @@ public class GraphRepository {
         return neo4jClient.query("""
             MATCH (w:Word)
             WITH w,
-                 [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources,
-                 coalesce(w.bookmark, $initialBookmark) AS bookmarkValue
+                 [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources
             WHERE ANY(source IN $sources WHERE source IN wordSources)
               AND (size($excludeLemmas) = 0 OR NOT w.lemma IN $excludeLemmas)
               AND NOT w.lemma CONTAINS '～'
@@ -380,17 +375,6 @@ public class GraphRepository {
                     trim(coalesce(w.dictEntryId, '')) <> ''
                     AND coalesce(w.dictEntryId, '') <> 'NOT_FOUND'
                   ))
-            WITH w, bookmarkValue,
-                 CASE
-                   WHEN bookmarkValue <= -3 THEN 6.0
-                   WHEN bookmarkValue = -2 THEN 5.0
-                   WHEN bookmarkValue = -1 THEN 4.0
-                   WHEN bookmarkValue = 0 THEN 3.0
-                   WHEN bookmarkValue = 1 THEN 2.0
-                   ELSE 1.0
-                 END AS weight
-            WITH w, weight, rand() AS r
-            WITH w, -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END) / weight AS sampleKey
             RETURN w.wordId AS wordId,
                    w.lemma AS lemma,
                    w.reading AS reading,
@@ -401,7 +385,7 @@ public class GraphRepository {
                    w.source AS source,
                    w.starGrade AS starGrade,
                    w.dictEntryId AS dictEntryId
-            ORDER BY sampleKey
+            ORDER BY rand()
             LIMIT $limit
             """)
             .bind(sources).to("sources")
@@ -409,7 +393,6 @@ public class GraphRepository {
             .bind(requireReading).to("requireReading")
             .bind(requireMeaning).to("requireMeaning")
             .bind(requireDictEntry).to("requireDictEntry")
-            .bind(INITIAL_BOOKMARK).to("initialBookmark")
             .bind(limit).to("limit")
             .fetch().all().stream().toList();
     }
@@ -420,11 +403,17 @@ public class GraphRepository {
     public Optional<Map<String, Object>> findQuizTargetBySources(List<String> sources, List<String> excludeLemmas,
                                                                  boolean requireReading, boolean requireMeaning,
                                                                  boolean requireDictEntry) {
+        return findQuizTargetCandidatesBySources(sources, excludeLemmas, 1, requireReading, requireMeaning, requireDictEntry)
+            .stream().findFirst();
+    }
+
+    public List<Map<String, Object>> findQuizTargetCandidatesBySources(List<String> sources, List<String> excludeLemmas,
+                                                                       int limit, boolean requireReading,
+                                                                       boolean requireMeaning, boolean requireDictEntry) {
         return neo4jClient.query("""
             MATCH (w:Word)
             WITH w,
-                 [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources,
-                 coalesce(w.bookmark, $initialBookmark) AS bookmarkValue
+                 [src IN split(coalesce(w.source, ''), ',') | trim(src)] AS wordSources
             WHERE ANY(source IN $sources WHERE source IN wordSources)
               AND (size($excludeLemmas) = 0 OR NOT w.lemma IN $excludeLemmas)
               AND NOT w.lemma CONTAINS '～'
@@ -442,17 +431,6 @@ public class GraphRepository {
                     trim(coalesce(w.dictEntryId, '')) <> ''
                     AND coalesce(w.dictEntryId, '') <> 'NOT_FOUND'
                   ))
-            WITH w, bookmarkValue,
-                 CASE
-                   WHEN bookmarkValue <= -3 THEN 6.0
-                   WHEN bookmarkValue = -2 THEN 5.0
-                   WHEN bookmarkValue = -1 THEN 4.0
-                   WHEN bookmarkValue = 0 THEN 3.0
-                   WHEN bookmarkValue = 1 THEN 2.0
-                   ELSE 1.0
-                 END AS weight
-            WITH w, weight, rand() AS r
-            WITH w, -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END) / weight AS sampleKey
             RETURN w.wordId AS wordId,
                    w.lemma AS lemma,
                    w.reading AS reading,
@@ -463,16 +441,16 @@ public class GraphRepository {
                    w.source AS source,
                    w.starGrade AS starGrade,
                    w.dictEntryId AS dictEntryId
-            ORDER BY sampleKey
-            LIMIT 1
+            ORDER BY rand()
+            LIMIT $limit
             """)
             .bind(sources).to("sources")
             .bind(excludeLemmas).to("excludeLemmas")
             .bind(requireReading).to("requireReading")
             .bind(requireMeaning).to("requireMeaning")
             .bind(requireDictEntry).to("requireDictEntry")
-            .bind(INITIAL_BOOKMARK).to("initialBookmark")
-            .fetch().first();
+            .bind(limit).to("limit")
+            .fetch().all().stream().toList();
     }
 
     /**
@@ -518,11 +496,7 @@ public class GraphRepository {
                  CASE distance
                    WHEN 1 THEN 1.0
                    ELSE 0.35
-                 END AS distanceWeight,
-                 rand() AS r
-            WITH candidate,
-                 -log(CASE WHEN r = 0 THEN 0.000001 ELSE r END)
-                   / (distanceWeight * log(1 + pathCount)) AS sampleKey
+                 END * log(1 + pathCount) AS graphWeight
             RETURN candidate.wordId AS wordId,
                    candidate.lemma AS lemma,
                    candidate.reading AS reading,
@@ -532,8 +506,11 @@ public class GraphRepository {
                    candidate.posDesc AS posDesc,
                    candidate.source AS source,
                    candidate.starGrade AS starGrade,
-                   candidate.dictEntryId AS dictEntryId
-            ORDER BY sampleKey
+                   candidate.dictEntryId AS dictEntryId,
+                   distance AS distance,
+                   pathCount AS pathCount,
+                   graphWeight AS graphWeight
+            ORDER BY rand()
             LIMIT $limit
             """)
             .bind(targetLemma).to("targetLemma")
@@ -606,6 +583,29 @@ public class GraphRepository {
             """)
             .bind(updates).to("updates")
             .bind(INITIAL_BOOKMARK).to("initialBookmark")
+            .fetch().first()
+            .map(row -> ((Number) row.get("updatedCount")).intValue())
+            .orElse(0);
+    }
+
+    public List<Map<String, Object>> findUserWordStatesForMigration() {
+        return neo4jClient.query("""
+            MATCH (w:Word)
+            WHERE trim(coalesce(w.wordId, '')) <> ''
+            RETURN w.wordId AS wordId,
+                   coalesce(w.bookmark, 0) AS bookmark,
+                   coalesce(w.image, '') AS image
+            ORDER BY w.wordId
+            """)
+            .fetch().all().stream().toList();
+    }
+
+    public int resetLegacyWordBookmarksToZero() {
+        return neo4jClient.query("""
+            MATCH (w:Word)
+            SET w.bookmark = 0
+            RETURN count(w) AS updatedCount
+            """)
             .fetch().first()
             .map(row -> ((Number) row.get("updatedCount")).intValue())
             .orElse(0);

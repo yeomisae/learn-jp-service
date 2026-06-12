@@ -7,6 +7,7 @@ import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
+import com.blue.learnjp.repository.UserWordStateRepository;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -23,13 +24,14 @@ class QuizServiceTests {
     void createWordSetUsesDefaultJlptStrategyAndSelectsRequiredWord() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(graphRepository.findQuizTargetBySources(
+        when(graphRepository.findQuizTargetCandidatesBySources(
             List.of("JLPT:N5", "JLPT:N4", "JLPT:N3", "JLPT:N2", "JLPT:N1"),
             List.of(),
+            500,
             true,
             true,
             true
-        )).thenReturn(Optional.of(Map.of(
+        )).thenReturn(List.of(Map.of(
             "wordId", "word-1",
             "lemma", "食べる",
             "reading", "たべる",
@@ -45,7 +47,7 @@ class QuizServiceTests {
             eq("食べる"),
             eq(List.of("JLPT:N5", "JLPT:N4", "JLPT:N3", "JLPT:N2", "JLPT:N1")),
             eq(List.of("食べる")),
-            eq(4),
+            eq(80),
             eq(true),
             eq(true),
             eq(true)
@@ -66,7 +68,7 @@ class QuizServiceTests {
         when(graphRepository.findQuizWordsBySources(
             eq(List.of("JLPT:N5", "JLPT:N4", "JLPT:N3", "JLPT:N2", "JLPT:N1")),
             eq(List.of("食べる", "どうも")),
-            eq(3),
+            eq(60),
             eq(true),
             eq(true),
             eq(true)
@@ -117,8 +119,8 @@ class QuizServiceTests {
     void createWordSetNormalizesLevelsAndExcludeLemmas() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(graphRepository.findQuizTargetBySources(anyList(), anyList(), anyBoolean(), anyBoolean(), anyBoolean()))
-            .thenReturn(Optional.empty());
+        when(graphRepository.findQuizTargetCandidatesBySources(anyList(), anyList(), anyInt(), anyBoolean(), anyBoolean(), anyBoolean()))
+            .thenReturn(List.of());
 
         QuizService quizService = new QuizService(graphRepository, jakoService);
 
@@ -132,9 +134,10 @@ class QuizServiceTests {
             false
         ));
 
-        verify(graphRepository).findQuizTargetBySources(
+        verify(graphRepository).findQuizTargetCandidatesBySources(
             List.of("JLPT:N5", "JLPT:N4"),
             List.of("食べる", "行く"),
+            500,
             false,
             true,
             false
@@ -145,8 +148,9 @@ class QuizServiceTests {
     void createWordSetUsesEdgeCandidatesBeforeRandomFallback() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        when(graphRepository.findQuizTargetBySources(anyList(), anyList(), anyBoolean(), anyBoolean(), anyBoolean()))
-            .thenReturn(Optional.of(Map.of(
+        when(graphRepository.findQuizTargetCandidatesBySources(anyList(), anyList(), anyInt(), anyBoolean(), anyBoolean(), anyBoolean()))
+            .thenReturn(List.of(Map.of(
+                "wordId", "word-dictionary",
                 "lemma", "辞書",
                 "reading", "じしょ",
                 "meaning", "사전",
@@ -161,13 +165,14 @@ class QuizServiceTests {
             eq("辞書"),
             eq(List.of("JLPT:N5")),
             eq(List.of("辞書")),
-            eq(2),
+            eq(50),
             eq(true),
             eq(true),
             eq(true)
         ))
             .thenReturn(List.of(
                 Map.of(
+                    "wordId", "word-friend",
                     "lemma", "友達",
                     "reading", "ともだち",
                     "meaning", "친구",
@@ -182,12 +187,13 @@ class QuizServiceTests {
         when(graphRepository.findQuizWordsBySources(
             eq(List.of("JLPT:N5")),
             eq(List.of("辞書", "友達")),
-            eq(1),
+            eq(50),
             eq(true),
             eq(true),
             eq(true)
         )).thenReturn(List.of(
                 Map.of(
+                    "wordId", "word-somehow",
                     "lemma", "どうも",
                     "reading", "どうも",
                     "meaning", "아무래도",
@@ -237,17 +243,20 @@ class QuizServiceTests {
     void updateBookmarksAppliesWrongAndCorrectDeltas() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
+        UserWordStateRepository userWordStateRepository = mock(UserWordStateRepository.class);
         when(graphRepository.findWordsByWordIds(List.of("word-pharmacy", "word-medicine")))
             .thenReturn(Map.of(
-                "word-pharmacy", Map.of("wordId", "word-pharmacy", "lemma", "薬局", "reading", "やっきょく", "source", "JLPT:N5", "meaning", "약국", "bookmark", -4),
-                "word-medicine", Map.of("wordId", "word-medicine", "lemma", "薬", "reading", "くすり", "source", "JLPT:N5", "meaning", "약", "bookmark", -2)
+                "word-pharmacy", Map.of("wordId", "word-pharmacy", "lemma", "薬局", "reading", "やっきょく", "source", "JLPT:N5", "meaning", "약국"),
+                "word-medicine", Map.of("wordId", "word-medicine", "lemma", "薬", "reading", "くすり", "source", "JLPT:N5", "meaning", "약")
             ));
-        when(graphRepository.adjustWordBookmarksByWordId(Map.of(
+        when(userWordStateRepository.adjustBookmarks(Map.of(
             "word-pharmacy", -1,
             "word-medicine", 1
         ))).thenReturn(2);
+        when(userWordStateRepository.findBookmarks(List.of("word-pharmacy", "word-medicine")))
+            .thenReturn(Map.of("word-pharmacy", -4, "word-medicine", -2));
 
-        QuizService quizService = new QuizService(graphRepository, jakoService);
+        QuizService quizService = new QuizService(graphRepository, jakoService, userWordStateRepository);
 
         QuizBookmarkUpdateResponse response = quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("word-pharmacy", "word-medicine"),
@@ -268,6 +277,7 @@ class QuizServiceTests {
             new QuizBookmarkUpdateResponse.TargetResult("word-medicine", "薬", "くすり", "JLPT:N5", "약", "correct", -2)
         );
         assertThat(response.status()).isEqualTo("ok");
+        verify(graphRepository, never()).adjustWordBookmarksByWordId(anyMap());
     }
 
     @Test
@@ -317,23 +327,25 @@ class QuizServiceTests {
     void processTurnUpdatesBookmarksAndCreatesNextWordSet() {
         GraphRepository graphRepository = mock(GraphRepository.class);
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
+        UserWordStateRepository userWordStateRepository = mock(UserWordStateRepository.class);
         when(graphRepository.findWordsByWordIds(List.of("word-eat")))
             .thenReturn(Map.of("word-eat", Map.of(
                 "wordId", "word-eat",
                 "lemma", "食べる",
                 "reading", "たべる",
                 "source", "JLPT:N5,EXAMPLE:JLPT_EDGE_BACKFILL",
-                "meaning", "먹다, 먹이를 먹다.",
-                "bookmark", -3
+                "meaning", "먹다, 먹이를 먹다."
             )));
-        when(graphRepository.adjustWordBookmarksByWordId(Map.of("word-eat", 1))).thenReturn(1);
-        when(graphRepository.findQuizTargetBySources(
+        when(userWordStateRepository.adjustBookmarks(Map.of("word-eat", 1))).thenReturn(1);
+        when(userWordStateRepository.findBookmarks(List.of("word-eat"))).thenReturn(Map.of("word-eat", -2));
+        when(graphRepository.findQuizTargetCandidatesBySources(
             List.of("JLPT:N5"),
             List.of("食べる"),
+            500,
             true,
             true,
             true
-        )).thenReturn(Optional.of(Map.of(
+        )).thenReturn(List.of(Map.of(
             "wordId", "word-water",
             "lemma", "水",
             "reading", "みず",
@@ -349,7 +361,7 @@ class QuizServiceTests {
             eq("水"),
             eq(List.of("JLPT:N5")),
             eq(List.of("食べる", "水")),
-            eq(1),
+            eq(50),
             eq(true),
             eq(true),
             eq(true)
@@ -357,13 +369,13 @@ class QuizServiceTests {
         when(graphRepository.findQuizWordsBySources(
             eq(List.of("JLPT:N5")),
             eq(List.of("食べる", "水")),
-            eq(1),
+            eq(50),
             eq(true),
             eq(true),
             eq(true)
         )).thenReturn(List.of());
 
-        QuizService quizService = new QuizService(graphRepository, jakoService);
+        QuizService quizService = new QuizService(graphRepository, jakoService, userWordStateRepository);
 
         QuizTurnResponse response = quizService.processTurn(new QuizTurnRequest(
             "random_jlpt",
@@ -379,8 +391,8 @@ class QuizServiceTests {
         ));
 
         assertThat(response.bookmark().updatedCount()).isEqualTo(1);
-        assertThat(response.targetDisplayLines()).containsExactly("• 食べる(たべる): N5, 먹다 ✅ (-3)");
-        assertThat(response.mustCopyTargetBlock()).isEqualTo("출제단어:\n\n• 食べる(たべる): N5, 먹다 ✅ (-3)");
+        assertThat(response.targetDisplayLines()).containsExactly("• 食べる(たべる): N5, 먹다 ✅ (-2)");
+        assertThat(response.mustCopyTargetBlock()).isEqualTo("출제단어:\n\n• 食べる(たべる): N5, 먹다 ✅ (-2)");
         assertThat(response.mustCopySeparator()).isEqualTo("———");
         assertThat(response.wordSet().requiredWord().lemma()).isEqualTo("水");
         assertThat(response.status()).isEqualTo("ok");
