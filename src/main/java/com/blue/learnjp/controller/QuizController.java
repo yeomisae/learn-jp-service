@@ -13,6 +13,8 @@ import com.blue.learnjp.dto.QuizProblemResponse;
 import com.blue.learnjp.dto.QuizSessionEndRequest;
 import com.blue.learnjp.dto.QuizSessionRequest;
 import com.blue.learnjp.dto.QuizSessionResponse;
+import com.blue.learnjp.dto.QuizStartRequest;
+import com.blue.learnjp.dto.QuizStartResponse;
 import com.blue.learnjp.dto.QuizTurnRequest;
 import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
@@ -76,6 +78,16 @@ public class QuizController {
     public ResponseEntity<?> startOrUpdateSession(@RequestBody(required = false) QuizSessionRequest request) {
         try {
             QuizSessionResponse response = quizLifecycleService.startOrUpdateSession(request);
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/start")
+    public ResponseEntity<?> startAndCreateDraft(@RequestBody(required = false) QuizStartRequest request) {
+        try {
+            QuizStartResponse response = quizLifecycleService.startAndCreateDraft(request);
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

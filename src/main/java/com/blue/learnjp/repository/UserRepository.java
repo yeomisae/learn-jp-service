@@ -14,7 +14,12 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.StringJoiner;
 
 @Repository
 public class UserRepository {
@@ -122,6 +127,48 @@ public class UserRepository {
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Failed to find user by discord sender id", e);
+        }
+    }
+
+    public Map<Long, UserRecord> findByIds(Collection<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Map.of();
+        }
+        StringJoiner placeholders = new StringJoiner(",");
+        List<Long> ids = userIds.stream()
+            .filter(id -> id != null && id > 0)
+            .distinct()
+            .toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        for (int i = 0; i < ids.size(); i++) {
+            placeholders.add("?");
+        }
+
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("""
+                 SELECT id, name, discord_sender_id
+                 FROM users
+                 WHERE id IN (%s)
+                 """.formatted(placeholders))) {
+            for (int i = 0; i < ids.size(); i++) {
+                statement.setLong(i + 1, ids.get(i));
+            }
+            try (ResultSet resultSet = statement.executeQuery()) {
+                Map<Long, UserRecord> users = new HashMap<>();
+                while (resultSet.next()) {
+                    UserRecord user = new UserRecord(
+                        resultSet.getLong("id"),
+                        resultSet.getString("name"),
+                        resultSet.getString("discord_sender_id")
+                    );
+                    users.put(user.id(), user);
+                }
+                return Map.copyOf(users);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to find users by ids", e);
         }
     }
 

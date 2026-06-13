@@ -138,7 +138,7 @@ public class QuizHistoryRepository {
 
     public List<QuizHistoryEntry> findByPeriod(Instant startInclusive, Instant endExclusive) {
         String sql = """
-            SELECT id, occurred_at, word_id, lemma, reading, source, meaning, result, bookmark
+            SELECT id, occurred_at, user_id, word_id, lemma, reading, source, meaning, result, bookmark
             FROM quiz_history
             WHERE occurred_at >= ? AND occurred_at < ?
             ORDER BY occurred_at ASC, id ASC
@@ -152,6 +152,8 @@ public class QuizHistoryRepository {
                     entries.add(new QuizHistoryEntry(
                         resultSet.getLong("id"),
                         resultSet.getString("occurred_at"),
+                        longOrNull(resultSet, "user_id"),
+                        null,
                         resultSet.getString("word_id"),
                         resultSet.getString("lemma"),
                         resultSet.getString("reading"),
@@ -212,6 +214,11 @@ public class QuizHistoryRepository {
 
     private Integer intOrNull(ResultSet resultSet, String column) throws SQLException {
         int value = resultSet.getInt(column);
+        return resultSet.wasNull() ? null : value;
+    }
+
+    private Long longOrNull(ResultSet resultSet, String column) throws SQLException {
+        long value = resultSet.getLong(column);
         return resultSet.wasNull() ? null : value;
     }
 

@@ -5,6 +5,8 @@ import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
 import com.blue.learnjp.dto.QuizHistoryDailyResponse;
 import com.blue.learnjp.repository.GraphRepository;
 import com.blue.learnjp.repository.QuizHistoryRepository;
+import com.blue.learnjp.repository.QuizHistoryRepository.HistoryContext;
+import com.blue.learnjp.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -57,6 +59,87 @@ class QuizHistoryServiceTests {
         assertThat(report.wrongLines()).containsExactly("• 鏡(かがみ): N4, 거울 (-4)");
         assertThat(report.mustCopyReport()).contains("✅ 맞은 단어");
         assertThat(report.mustCopyReport()).contains("❌ 틀린 단어");
+    }
+
+    @Test
+    void dailyReportGroupsEntriesByUser() {
+        QuizHistoryRepository historyRepository = new QuizHistoryRepository(
+            new QuizHistoryConfig(tempDir.resolve("quiz-history.sqlite").toString())
+        );
+        UserRepository userRepository = new UserRepository(
+            new QuizHistoryConfig(tempDir.resolve("quiz-history.sqlite").toString())
+        );
+        historyRepository.initialize();
+        userRepository.initialize();
+        long blueId = userRepository.upsertByDiscordSenderId("BLUE", "sender-blue").id();
+        long greenId = userRepository.upsertByDiscordSenderId("GREEN", "sender-green").id();
+        QuizHistoryService service = new QuizHistoryService(historyRepository, null, userRepository);
+
+        service.record(new QuizBookmarkUpdateResponse(
+            1,
+            Map.of("word-water", 1),
+            Map.of(),
+            List.of(),
+            List.of(),
+            List.of(new QuizBookmarkUpdateResponse.TargetResult(
+                "word-water", "水", "みず", "JLPT:N5", "물.", "correct", -2
+            )),
+            "ok"
+        ), new HistoryContext(blueId, "scope", "problem-1", "answer-1"));
+        service.record(new QuizBookmarkUpdateResponse(
+            1,
+            Map.of("word-mirror", -1),
+            Map.of(),
+            List.of(),
+            List.of(),
+            List.of(new QuizBookmarkUpdateResponse.TargetResult(
+                "word-mirror", "鏡", "かがみ", "JLPT:N4", "거울.", "wrong", -4
+            )),
+            "ok"
+        ), new HistoryContext(greenId, "scope", "problem-1", "answer-2"));
+
+        QuizHistoryDailyResponse report = service.dailyReport(
+            LocalDate.now(ZoneId.of("Asia/Seoul")),
+            ZoneId.of("Asia/Seoul")
+        );
+
+        assertThat(report.mustCopyReport()).contains("👤 BLUE");
+        assertThat(report.mustCopyReport()).contains("• 水(みず): N5, 물 (-2)");
+        assertThat(report.mustCopyReport()).contains("👤 GREEN");
+        assertThat(report.mustCopyReport()).contains("• 鏡(かがみ): N4, 거울 (-4)");
+    }
+
+    @Test
+    void dailyReportHandlesLegacyEntriesWithoutUserId() {
+        QuizHistoryRepository historyRepository = new QuizHistoryRepository(
+            new QuizHistoryConfig(tempDir.resolve("quiz-history.sqlite").toString())
+        );
+        UserRepository userRepository = new UserRepository(
+            new QuizHistoryConfig(tempDir.resolve("quiz-history.sqlite").toString())
+        );
+        historyRepository.initialize();
+        userRepository.initialize();
+        QuizHistoryService service = new QuizHistoryService(historyRepository, null, userRepository);
+
+        service.record(new QuizBookmarkUpdateResponse(
+            1,
+            Map.of("word-water", 1),
+            Map.of(),
+            List.of(),
+            List.of(),
+            List.of(new QuizBookmarkUpdateResponse.TargetResult(
+                "word-water", "水", "みず", "JLPT:N5", "물.", "correct", -2
+            )),
+            "ok"
+        ));
+
+        QuizHistoryDailyResponse report = service.dailyReport(
+            LocalDate.now(ZoneId.of("Asia/Seoul")),
+            ZoneId.of("Asia/Seoul")
+        );
+
+        assertThat(report.mustCopyReport()).contains("👤 사용자 미확인");
+        assertThat(report.mustCopyReport()).contains("• 水(みず): N5, 물 (-2)");
     }
 
     @Test

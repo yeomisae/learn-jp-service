@@ -16,6 +16,8 @@ import com.blue.learnjp.dto.QuizScopeInfo;
 import com.blue.learnjp.dto.QuizSessionEndRequest;
 import com.blue.learnjp.dto.QuizSessionRequest;
 import com.blue.learnjp.dto.QuizSessionResponse;
+import com.blue.learnjp.dto.QuizStartRequest;
+import com.blue.learnjp.dto.QuizStartResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.QuizHistoryRepository;
@@ -70,6 +72,48 @@ public class QuizLifecycleService {
             repository.findOpenProblem(session.scopeId()).map(this::toProblemResponse).orElse(null),
             null,
             List.of(),
+            "ok"
+        );
+    }
+
+    public QuizStartResponse startAndCreateDraft(QuizStartRequest request) {
+        ScopeRecord scope = normalizeScope(request != null ? request.scope() : null);
+        String senderId = request != null ? request.discordSenderId() : null;
+        quizService.resolveRequiredUserId(senderId);
+        SessionRecord existing = repository.findSession(scope.scopeId()).orElse(null);
+        List<String> levels = request != null && request.levels() != null && !request.levels().isEmpty()
+            ? quizService.normalizeQuizLevels(request.levels())
+            : existing != null ? levelsFromString(existing.levels()) : INITIAL_LEVELS;
+        SessionRecord session = repository.upsertSession(scope, levelsToString(levels), "ACTIVE");
+        QuizProblemResponse openProblem = repository.findOpenProblem(session.scopeId())
+            .map(this::toProblemResponse)
+            .orElse(null);
+        if (openProblem != null) {
+            return new QuizStartResponse(
+                session.scopeId(),
+                levelsFromString(session.levels()),
+                session.status(),
+                openProblem,
+                null,
+                "ok"
+            );
+        }
+        QuizWordSetResponse wordSet = quizService.createWordSet(new QuizWordSetRequest(
+            "random_jlpt",
+            levelsFromString(session.levels()),
+            request != null ? request.count() : null,
+            List.of(),
+            true,
+            true,
+            true,
+            senderId
+        ));
+        return new QuizStartResponse(
+            session.scopeId(),
+            levelsFromString(session.levels()),
+            session.status(),
+            null,
+            wordSet,
             "ok"
         );
     }
