@@ -611,6 +611,19 @@ public class GraphRepository {
             .orElse(0);
     }
 
+    public List<String> findAllWordIds() {
+        return neo4jClient.query("""
+            MATCH (w:Word)
+            WHERE trim(coalesce(w.wordId, '')) <> ''
+            RETURN w.wordId AS wordId
+            ORDER BY w.wordId
+            """)
+            .fetch().all().stream()
+            .map(row -> (String) row.get("wordId"))
+            .filter(wordId -> wordId != null && !wordId.isBlank())
+            .toList();
+    }
+
     /**
      * 문장이 이미 등록되어 있는지 확인한다.
      */
