@@ -2,6 +2,8 @@ package com.blue.learnjp.controller;
 
 import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
+import com.blue.learnjp.dto.QuizAnswerGradeSubmitRequest;
+import com.blue.learnjp.dto.QuizAnswerGradeSubmitResponse;
 import com.blue.learnjp.dto.QuizAnswerSubmitRequest;
 import com.blue.learnjp.dto.QuizAnswerSubmitResponse;
 import com.blue.learnjp.dto.QuizNextProblemRequest;
@@ -139,6 +141,17 @@ public class QuizController {
                                           @RequestBody(required = false) QuizAnswerSubmitRequest request) {
         try {
             QuizAnswerSubmitResponse response = quizLifecycleService.submitAnswer(problemId, request);
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/problems/{problemId}/grades")
+    public ResponseEntity<?> gradeAnswers(@PathVariable String problemId,
+                                          @RequestBody(required = false) QuizAnswerGradeSubmitRequest request) {
+        try {
+            QuizAnswerGradeSubmitResponse response = quizLifecycleService.gradeAnswers(problemId, request);
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

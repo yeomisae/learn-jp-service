@@ -9,5 +9,6 @@ public record QuizSessionResponse(
     QuizProblemResponse openProblem,
     QuizProblemResponse closedProblem,
     List<String> summaryLines,
+    List<QuizPendingAnswerResponse> pendingAnswers,
     String status
 ) {}

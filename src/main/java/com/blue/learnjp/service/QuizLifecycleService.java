@@ -1,12 +1,16 @@
 package com.blue.learnjp.service;
 
 import com.blue.learnjp.dto.QuizAnswerResultRequest;
+import com.blue.learnjp.dto.QuizAnswerGradeRequest;
+import com.blue.learnjp.dto.QuizAnswerGradeSubmitRequest;
+import com.blue.learnjp.dto.QuizAnswerGradeSubmitResponse;
 import com.blue.learnjp.dto.QuizAnswerSubmitRequest;
 import com.blue.learnjp.dto.QuizAnswerSubmitResponse;
 import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
 import com.blue.learnjp.dto.QuizNextProblemRequest;
 import com.blue.learnjp.dto.QuizNextProblemResponse;
+import com.blue.learnjp.dto.QuizPendingAnswerResponse;
 import com.blue.learnjp.dto.QuizProblemCreateRequest;
 import com.blue.learnjp.dto.QuizProblemDraftRequest;
 import com.blue.learnjp.dto.QuizProblemDraftResponse;
@@ -24,7 +28,9 @@ import com.blue.learnjp.repository.QuizHistoryRepository;
 import com.blue.learnjp.repository.QuizSessionRepository;
 import com.blue.learnjp.repository.QuizSessionRepository.AnswerCreateRecord;
 import com.blue.learnjp.repository.QuizSessionRepository.AnswerResultCreateRecord;
+import com.blue.learnjp.repository.QuizSessionRepository.AnswerRecord;
 import com.blue.learnjp.repository.QuizSessionRepository.AnswerSummaryRecord;
+import com.blue.learnjp.repository.QuizSessionRepository.PendingAnswerRecord;
 import com.blue.learnjp.repository.QuizSessionRepository.ProblemCreateRecord;
 import com.blue.learnjp.repository.QuizSessionRepository.ProblemRecord;
 import com.blue.learnjp.repository.QuizSessionRepository.ScopeRecord;
@@ -71,6 +77,7 @@ public class QuizLifecycleService {
             session.status(),
             repository.findOpenProblem(session.scopeId()).map(this::toProblemResponse).orElse(null),
             null,
+            List.of(),
             List.of(),
             "ok"
         );
@@ -125,6 +132,9 @@ public class QuizLifecycleService {
         List<String> summaryLines = closed != null
             ? buildSummaryLines(repository.findAnswerSummaries(closed.id()))
             : List.of();
+        List<QuizPendingAnswerResponse> pendingAnswers = closed != null
+            ? toPendingAnswerResponses(repository.findPendingAnswers(closed.id()))
+            : List.of();
         SessionRecord session = repository.endSession(scope.scopeId());
         return new QuizSessionResponse(
             session.scopeId(),
@@ -133,6 +143,7 @@ public class QuizLifecycleService {
             null,
             closed != null ? toProblemResponse(closed) : null,
             summaryLines,
+            pendingAnswers,
             "ok"
         );
     }
@@ -197,18 +208,7 @@ public class QuizLifecycleService {
             throw new IllegalArgumentException("Answer already submitted for this problem");
         }
 
-        List<QuizProblemTarget> targets = readTargets(problem.targetsJson());
-        List<String> targetWordIds = targets.stream().map(QuizProblemTarget::wordId).filter(id -> id != null && !id.isBlank()).toList();
-        if (targetWordIds.isEmpty()) {
-            throw new IllegalArgumentException("Quiz problem has no target wordIds");
-        }
-        ResultBuckets buckets = resultBuckets(targetWordIds, request != null ? request.results() : null);
         String answerId = UUID.randomUUID().toString();
-        QuizBookmarkUpdateResponse bookmark = quizService.updateBookmarks(
-            new QuizBookmarkUpdateRequest(targetWordIds, buckets.wrongWordIds(), buckets.correctWordIds(), senderId),
-            new QuizHistoryRepository.HistoryContext(userId, problem.scopeId(), problem.id(), answerId)
-        );
-
         repository.saveAnswer(
             new AnswerCreateRecord(
                 answerId,
@@ -218,11 +218,22 @@ public class QuizLifecycleService {
                 requiredText(senderId, "discordSenderId"),
                 request != null ? request.displayName() : null,
                 requiredText(request != null ? request.answerText() : null, "answerText"),
-                normalizeOverallResult(request != null ? request.overallResult() : null),
-                request != null ? request.feedback() : null
+                hasGrade(request) ? normalizeOverallResult(request != null ? request.overallResult() : null) : null,
+                hasGrade(request) ? request != null ? request.feedback() : null : null
             ),
-            toAnswerResultRecords(bookmark)
+            List.of()
         );
+
+        QuizBookmarkUpdateResponse bookmark = null;
+        if (hasGrade(request)) {
+            AnswerRecord answer = repository.findAnswer(answerId).orElseThrow();
+            bookmark = applyAnswerGrade(problem, answer, new QuizAnswerGradeRequest(
+                answerId,
+                request != null ? request.overallResult() : null,
+                request != null ? request.feedback() : null,
+                request != null ? request.results() : null
+            ));
+        }
 
         return new QuizAnswerSubmitResponse(
             answerId,
@@ -230,7 +241,45 @@ public class QuizLifecycleService {
             problem.scopeId(),
             userId,
             bookmark,
-            buildTargetDisplayLines(bookmark),
+            bookmark != null ? buildTargetDisplayLines(bookmark) : List.of("• 미채점"),
+            "ok"
+        );
+    }
+
+    public QuizAnswerGradeSubmitResponse gradeAnswers(String problemId, QuizAnswerGradeSubmitRequest request) {
+        ProblemRecord problem = repository.findProblem(requiredText(problemId, "problemId"))
+            .orElseThrow(() -> new IllegalArgumentException("Quiz problem not found"));
+        if (request == null || request.grades() == null || request.grades().isEmpty()) {
+            return new QuizAnswerGradeSubmitResponse(
+                problem.id(),
+                problem.scopeId(),
+                0,
+                buildSummaryLines(repository.findAnswerSummaries(problem.id())),
+                "ok"
+            );
+        }
+
+        int gradedCount = 0;
+        for (QuizAnswerGradeRequest grade : request.grades()) {
+            if (grade == null || grade.answerId() == null || grade.answerId().isBlank()) {
+                continue;
+            }
+            AnswerRecord answer = repository.findAnswer(grade.answerId().trim())
+                .orElseThrow(() -> new IllegalArgumentException("Quiz answer not found: " + grade.answerId()));
+            if (!problem.id().equals(answer.problemId())) {
+                throw new IllegalArgumentException("Quiz answer does not belong to problem: " + grade.answerId());
+            }
+            if (repository.answerHasResults(answer.id())) {
+                continue;
+            }
+            applyAnswerGrade(problem, answer, grade);
+            gradedCount++;
+        }
+        return new QuizAnswerGradeSubmitResponse(
+            problem.id(),
+            problem.scopeId(),
+            gradedCount,
+            buildSummaryLines(repository.findAnswerSummaries(problem.id())),
             "ok"
         );
     }
@@ -241,12 +290,40 @@ public class QuizLifecycleService {
         ProblemRecord closed = repository.closeOpenProblem(scope.scopeId())
             .orElseThrow(() -> new IllegalArgumentException("Open quiz problem not found"));
         List<String> summaryLines = buildSummaryLines(repository.findAnswerSummaries(closed.id()));
+        List<QuizPendingAnswerResponse> pendingAnswers = toPendingAnswerResponses(repository.findPendingAnswers(closed.id()));
         QuizProblemDraftResponse nextDraft = createDraft(new QuizProblemDraftRequest(
             request != null ? request.scope() : null,
             request != null ? request.discordSenderId() : null,
             request != null ? request.count() : null
         ));
-        return new QuizNextProblemResponse(toProblemResponse(closed), summaryLines, nextDraft, "ok");
+        return new QuizNextProblemResponse(toProblemResponse(closed), summaryLines, pendingAnswers, nextDraft, "ok");
+    }
+
+    private QuizBookmarkUpdateResponse applyAnswerGrade(
+        ProblemRecord problem,
+        AnswerRecord answer,
+        QuizAnswerGradeRequest grade
+    ) {
+        List<QuizProblemTarget> targets = readTargets(problem.targetsJson());
+        List<String> targetWordIds = targets.stream()
+            .map(QuizProblemTarget::wordId)
+            .filter(id -> id != null && !id.isBlank())
+            .toList();
+        if (targetWordIds.isEmpty()) {
+            throw new IllegalArgumentException("Quiz problem has no target wordIds");
+        }
+        ResultBuckets buckets = resultBuckets(targetWordIds, grade != null ? grade.results() : null);
+        QuizBookmarkUpdateResponse bookmark = quizService.updateBookmarks(
+            new QuizBookmarkUpdateRequest(targetWordIds, buckets.wrongWordIds(), buckets.correctWordIds(), answer.senderId()),
+            new QuizHistoryRepository.HistoryContext(answer.userId(), problem.scopeId(), problem.id(), answer.id())
+        );
+        repository.saveAnswerGrade(
+            answer,
+            normalizeOverallResult(grade != null ? grade.overallResult() : null),
+            grade != null ? grade.feedback() : null,
+            toAnswerResultRecords(bookmark)
+        );
+        return bookmark;
     }
 
     private SessionRecord requireActiveSession(String scopeId) {
@@ -363,6 +440,25 @@ public class QuizLifecycleService {
             ));
         }
         return List.copyOf(records);
+    }
+
+    private List<QuizPendingAnswerResponse> toPendingAnswerResponses(List<PendingAnswerRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return List.of();
+        }
+        return records.stream()
+            .map(record -> new QuizPendingAnswerResponse(
+                record.answerId(),
+                record.userId(),
+                record.displayName(),
+                record.answerText(),
+                record.createdAt()
+            ))
+            .toList();
+    }
+
+    private boolean hasGrade(QuizAnswerSubmitRequest request) {
+        return request != null && request.results() != null && !request.results().isEmpty();
     }
 
     private QuizProblemResponse toProblemResponse(ProblemRecord problem) {

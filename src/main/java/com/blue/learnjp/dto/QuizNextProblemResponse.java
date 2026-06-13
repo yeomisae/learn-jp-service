@@ -5,6 +5,7 @@ import java.util.List;
 public record QuizNextProblemResponse(
     QuizProblemResponse closedProblem,
     List<String> summaryLines,
+    List<QuizPendingAnswerResponse> pendingAnswers,
     QuizProblemDraftResponse nextDraft,
     String status
 ) {}

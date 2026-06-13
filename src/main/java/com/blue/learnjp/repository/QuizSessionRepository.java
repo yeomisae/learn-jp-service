@@ -304,6 +304,53 @@ public class QuizSessionRepository {
         }
     }
 
+    public Optional<AnswerRecord> findAnswer(String answerId) {
+        String sql = """
+            SELECT id, problem_id, scope_id, user_id, sender_id, display_name, answer_text,
+                   overall_result, feedback, created_at
+            FROM quiz_answers
+            WHERE id = ?
+            """;
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, answerId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? Optional.of(toAnswer(resultSet)) : Optional.empty();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to find quiz answer", e);
+        }
+    }
+
+    public List<PendingAnswerRecord> findPendingAnswers(String problemId) {
+        String sql = """
+            SELECT a.id, a.user_id, a.display_name, a.answer_text, a.created_at
+            FROM quiz_answers a
+            WHERE a.problem_id = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM quiz_answer_results r WHERE r.answer_id = a.id
+              )
+            ORDER BY a.created_at ASC
+            """;
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, problemId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<PendingAnswerRecord> records = new ArrayList<>();
+                while (resultSet.next()) {
+                    records.add(new PendingAnswerRecord(
+                        resultSet.getString("id"),
+                        resultSet.getLong("user_id"),
+                        resultSet.getString("display_name"),
+                        resultSet.getString("answer_text"),
+                        resultSet.getString("created_at")
+                    ));
+                }
+                return List.copyOf(records);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to read pending quiz answers", e);
+        }
+    }
+
     public void saveAnswer(AnswerCreateRecord answer, List<AnswerResultCreateRecord> results) {
         try (Connection connection = connect();
              PreparedStatement answerStatement = connection.prepareStatement("""
@@ -361,6 +408,77 @@ public class QuizSessionRepository {
                 throw new IllegalArgumentException("Answer already submitted for this problem");
             }
             throw new IllegalStateException("Failed to save quiz answer", e);
+        }
+    }
+
+    public boolean answerHasResults(String answerId) {
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement("""
+                 SELECT 1 FROM quiz_answer_results WHERE answer_id = ? LIMIT 1
+                 """)) {
+            statement.setString(1, answerId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to check quiz answer results", e);
+        }
+    }
+
+    public void saveAnswerGrade(
+        AnswerRecord answer,
+        String overallResult,
+        String feedback,
+        List<AnswerResultCreateRecord> results
+    ) {
+        if (answerHasResults(answer.id())) {
+            throw new IllegalArgumentException("Answer already graded");
+        }
+        try (Connection connection = connect();
+             PreparedStatement answerStatement = connection.prepareStatement("""
+                 UPDATE quiz_answers
+                 SET overall_result = ?, feedback = ?
+                 WHERE id = ?
+                 """);
+             PreparedStatement resultStatement = connection.prepareStatement("""
+                 INSERT INTO quiz_answer_results (
+                     answer_id, problem_id, scope_id, user_id, word_id, lemma, reading, source, meaning,
+                     result, bookmark_delta, bookmark_after, created_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 """)) {
+            connection.setAutoCommit(false);
+            String now = Instant.now().toString();
+            answerStatement.setString(1, blankToNull(overallResult));
+            answerStatement.setString(2, blankToNull(feedback));
+            answerStatement.setString(3, answer.id());
+            answerStatement.executeUpdate();
+
+            if (results != null) {
+                for (AnswerResultCreateRecord result : results) {
+                    resultStatement.setString(1, answer.id());
+                    resultStatement.setString(2, answer.problemId());
+                    resultStatement.setString(3, answer.scopeId());
+                    resultStatement.setLong(4, answer.userId());
+                    resultStatement.setString(5, result.wordId());
+                    resultStatement.setString(6, result.lemma());
+                    resultStatement.setString(7, blankToNull(result.reading()));
+                    resultStatement.setString(8, blankToNull(result.source()));
+                    resultStatement.setString(9, blankToNull(result.meaning()));
+                    resultStatement.setString(10, result.result());
+                    resultStatement.setInt(11, result.bookmarkDelta());
+                    if (result.bookmarkAfter() != null) {
+                        resultStatement.setInt(12, result.bookmarkAfter());
+                    } else {
+                        resultStatement.setObject(12, null);
+                    }
+                    resultStatement.setString(13, now);
+                    resultStatement.addBatch();
+                }
+                resultStatement.executeBatch();
+            }
+            connection.commit();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to save quiz answer grade", e);
         }
     }
 
@@ -442,6 +560,21 @@ public class QuizSessionRepository {
         );
     }
 
+    private AnswerRecord toAnswer(ResultSet resultSet) throws SQLException {
+        return new AnswerRecord(
+            resultSet.getString("id"),
+            resultSet.getString("problem_id"),
+            resultSet.getString("scope_id"),
+            resultSet.getLong("user_id"),
+            resultSet.getString("sender_id"),
+            resultSet.getString("display_name"),
+            resultSet.getString("answer_text"),
+            resultSet.getString("overall_result"),
+            resultSet.getString("feedback"),
+            resultSet.getString("created_at")
+        );
+    }
+
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
     }
@@ -517,6 +650,27 @@ public class QuizSessionRepository {
         String answerText,
         String overallResult,
         String feedback
+    ) {}
+
+    public record AnswerRecord(
+        String id,
+        String problemId,
+        String scopeId,
+        long userId,
+        String senderId,
+        String displayName,
+        String answerText,
+        String overallResult,
+        String feedback,
+        String createdAt
+    ) {}
+
+    public record PendingAnswerRecord(
+        String answerId,
+        long userId,
+        String displayName,
+        String answerText,
+        String createdAt
     ) {}
 
     public record AnswerResultCreateRecord(
