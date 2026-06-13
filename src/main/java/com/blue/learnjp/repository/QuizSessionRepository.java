@@ -366,7 +366,7 @@ public class QuizSessionRepository {
 
     public List<AnswerSummaryRecord> findAnswerSummaries(String problemId) {
         String sql = """
-            SELECT a.user_id, a.display_name, r.word_id, r.lemma, r.reading, r.source, r.meaning,
+            SELECT a.user_id, a.display_name, a.feedback, r.word_id, r.lemma, r.reading, r.source, r.meaning,
                    r.result, r.bookmark_delta, r.bookmark_after
             FROM quiz_answer_results r
             JOIN quiz_answers a ON a.id = r.answer_id
@@ -381,6 +381,7 @@ public class QuizSessionRepository {
                     records.add(new AnswerSummaryRecord(
                         resultSet.getLong("user_id"),
                         resultSet.getString("display_name"),
+                        resultSet.getString("feedback"),
                         resultSet.getString("word_id"),
                         resultSet.getString("lemma"),
                         resultSet.getString("reading"),
@@ -532,6 +533,7 @@ public class QuizSessionRepository {
     public record AnswerSummaryRecord(
         long userId,
         String displayName,
+        String feedback,
         String wordId,
         String lemma,
         String reading,

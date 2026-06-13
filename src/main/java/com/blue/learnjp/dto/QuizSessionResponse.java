@@ -7,5 +7,7 @@ public record QuizSessionResponse(
     List<String> levels,
     String sessionStatus,
     QuizProblemResponse openProblem,
+    QuizProblemResponse closedProblem,
+    List<String> summaryLines,
     String status
 ) {}

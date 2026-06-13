@@ -68,6 +68,8 @@ public class QuizLifecycleService {
             levelsFromString(session.levels()),
             session.status(),
             repository.findOpenProblem(session.scopeId()).map(this::toProblemResponse).orElse(null),
+            null,
+            List.of(),
             "ok"
         );
     }
@@ -75,12 +77,18 @@ public class QuizLifecycleService {
     public QuizSessionResponse endSession(QuizSessionEndRequest request) {
         ScopeRecord scope = normalizeScope(request != null ? request.scope() : null);
         quizService.resolveRequiredUserId(request != null ? request.discordSenderId() : null);
+        ProblemRecord closed = repository.closeOpenProblem(scope.scopeId()).orElse(null);
+        List<String> summaryLines = closed != null
+            ? buildSummaryLines(repository.findAnswerSummaries(closed.id()))
+            : List.of();
         SessionRecord session = repository.endSession(scope.scopeId());
         return new QuizSessionResponse(
             session.scopeId(),
             levelsFromString(session.levels()),
             session.status(),
             null,
+            closed != null ? toProblemResponse(closed) : null,
+            summaryLines,
             "ok"
         );
     }
@@ -375,7 +383,16 @@ public class QuizLifecycleService {
                     + " " + resultMark(item.result())
                     + " (" + (item.bookmarkAfter() != null ? item.bookmarkAfter() : "-") + ")")
                 .toList();
-            lines.add("• " + entry.getKey() + ": " + String.join(", ", parts));
+            String feedback = entry.getValue().stream()
+                .map(AnswerSummaryRecord::feedback)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse("");
+            String line = "• " + entry.getKey() + ": " + String.join(", ", parts);
+            if (!feedback.isBlank()) {
+                line += " — " + feedback;
+            }
+            lines.add(line);
         }
         return List.copyOf(lines);
     }
