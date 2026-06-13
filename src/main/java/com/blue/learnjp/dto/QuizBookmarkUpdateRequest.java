@@ -5,5 +5,6 @@ import java.util.List;
 public record QuizBookmarkUpdateRequest(
     List<String> targetWordIds,
     List<String> wrongWordIds,
-    List<String> correctWordIds
+    List<String> correctWordIds,
+    String discordSenderId
 ) {}

@@ -12,5 +12,6 @@ public record QuizTurnRequest(
     Boolean requireDictEntry,
     List<String> targetWordIds,
     List<String> wrongWordIds,
-    List<String> correctWordIds
+    List<String> correctWordIds,
+    String discordSenderId
 ) {}

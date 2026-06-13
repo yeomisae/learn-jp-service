@@ -90,7 +90,8 @@ class QuizServiceTests {
         QuizService quizService = new QuizService(graphRepository, jakoService);
 
         QuizWordSetResponse response = quizService.createWordSet(new QuizWordSetRequest(
-            null, null, null, null, null, null, null
+            null, null, null, null, null, null, null,
+            null
         ));
 
         assertThat(response.strategyUsed()).isEqualTo("random_jlpt");
@@ -131,7 +132,8 @@ class QuizServiceTests {
             List.of(" 食べる ", "", "行く"),
             false,
             true,
-            false
+            false,
+            null
         ));
 
         verify(graphRepository).findQuizTargetCandidatesBySources(
@@ -209,7 +211,8 @@ class QuizServiceTests {
         QuizService quizService = new QuizService(graphRepository, jakoService);
 
         QuizWordSetResponse response = quizService.createWordSet(new QuizWordSetRequest(
-            "random_jlpt", List.of("N5"), 3, List.of(), true, true, true
+            "random_jlpt", List.of("N5"), 3, List.of(), true, true, true,
+            null
         ));
 
         assertThat(response.requiredWord().lemma()).isEqualTo("辞書");
@@ -222,7 +225,8 @@ class QuizServiceTests {
         QuizService quizService = new QuizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
 
         assertThatThrownBy(() -> quizService.createWordSet(new QuizWordSetRequest(
-            "connected", List.of("N5"), 3, List.of(), true, true, true
+            "connected", List.of("N5"), 3, List.of(), true, true, true,
+            null
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("Unsupported strategy");
@@ -233,7 +237,8 @@ class QuizServiceTests {
         QuizService quizService = new QuizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
 
         assertThatThrownBy(() -> quizService.createWordSet(new QuizWordSetRequest(
-            "random_jlpt", List.of("N0"), 3, List.of(), true, true, true
+            "random_jlpt", List.of("N0"), 3, List.of(), true, true, true,
+            null
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("Unsupported level");
@@ -249,11 +254,11 @@ class QuizServiceTests {
                 "word-pharmacy", Map.of("wordId", "word-pharmacy", "lemma", "薬局", "reading", "やっきょく", "source", "JLPT:N5", "meaning", "약국"),
                 "word-medicine", Map.of("wordId", "word-medicine", "lemma", "薬", "reading", "くすり", "source", "JLPT:N5", "meaning", "약")
             ));
-        when(userWordStateRepository.adjustBookmarks(Map.of(
+        when(userWordStateRepository.adjustBookmarks(UserWordStateRepository.DEFAULT_USER_ID, Map.of(
             "word-pharmacy", -1,
             "word-medicine", 1
         ))).thenReturn(2);
-        when(userWordStateRepository.findBookmarks(List.of("word-pharmacy", "word-medicine")))
+        when(userWordStateRepository.findBookmarks(UserWordStateRepository.DEFAULT_USER_ID, List.of("word-pharmacy", "word-medicine")))
             .thenReturn(Map.of("word-pharmacy", -4, "word-medicine", -2));
 
         QuizService quizService = new QuizService(graphRepository, jakoService, userWordStateRepository);
@@ -261,7 +266,8 @@ class QuizServiceTests {
         QuizBookmarkUpdateResponse response = quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("word-pharmacy", "word-medicine"),
             List.of(" word-pharmacy ", ""),
-            List.of("word-medicine")
+            List.of("word-medicine"),
+            null
         ));
 
         assertThat(response.updatedCount()).isEqualTo(2);
@@ -287,7 +293,8 @@ class QuizServiceTests {
         assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("word-pharmacy"),
             List.of("word-pharmacy"),
-            List.of("word-pharmacy")
+            List.of("word-pharmacy"),
+            null
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("both wrong and correct");
@@ -300,7 +307,8 @@ class QuizServiceTests {
         assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("word-target"),
             List.of("word-noise"),
-            List.of()
+            List.of(),
+            null
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("wrongWordIds must be included");
@@ -317,7 +325,8 @@ class QuizServiceTests {
         assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("missing-word"),
             List.of(),
-            List.of()
+            List.of(),
+            null
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("Unknown targetWordIds");
@@ -336,8 +345,8 @@ class QuizServiceTests {
                 "source", "JLPT:N5,EXAMPLE:JLPT_EDGE_BACKFILL",
                 "meaning", "먹다, 먹이를 먹다."
             )));
-        when(userWordStateRepository.adjustBookmarks(Map.of("word-eat", 1))).thenReturn(1);
-        when(userWordStateRepository.findBookmarks(List.of("word-eat"))).thenReturn(Map.of("word-eat", -2));
+        when(userWordStateRepository.adjustBookmarks(UserWordStateRepository.DEFAULT_USER_ID, Map.of("word-eat", 1))).thenReturn(1);
+        when(userWordStateRepository.findBookmarks(UserWordStateRepository.DEFAULT_USER_ID, List.of("word-eat"))).thenReturn(Map.of("word-eat", -2));
         when(graphRepository.findQuizTargetCandidatesBySources(
             List.of("JLPT:N5"),
             List.of("食べる"),
@@ -387,7 +396,8 @@ class QuizServiceTests {
             true,
             List.of("word-eat"),
             List.of(),
-            List.of("word-eat")
+            List.of("word-eat"),
+            null
         ));
 
         assertThat(response.bookmark().updatedCount()).isEqualTo(1);

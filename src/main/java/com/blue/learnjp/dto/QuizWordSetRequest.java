@@ -9,5 +9,6 @@ public record QuizWordSetRequest(
     List<String> excludeLemmas,
     Boolean requireReading,
     Boolean requireMeaning,
-    Boolean requireDictEntry
+    Boolean requireDictEntry,
+    String discordSenderId
 ) {}
