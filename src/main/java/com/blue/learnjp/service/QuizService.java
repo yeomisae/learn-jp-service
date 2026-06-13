@@ -7,6 +7,7 @@ import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
+import com.blue.learnjp.repository.QuizHistoryRepository;
 import com.blue.learnjp.repository.UserRepository;
 import com.blue.learnjp.repository.UserWordStateRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -413,6 +414,10 @@ public class QuizService {
     }
 
     public QuizBookmarkUpdateResponse updateBookmarks(QuizBookmarkUpdateRequest request) {
+        return updateBookmarks(request, null);
+    }
+
+    public QuizBookmarkUpdateResponse updateBookmarks(QuizBookmarkUpdateRequest request, QuizHistoryRepository.HistoryContext historyContext) {
         BookmarkResolution resolution = normalizeBookmarkDeltas(request);
         long userId = resolveUserId(request != null ? request.discordSenderId() : null);
         Map<String, Map<String, Object>> existingWords = resolution.targetWordIds().isEmpty()
@@ -463,15 +468,15 @@ public class QuizService {
             response.updatedCount(),
             targetLemmasFrom(response)
         );
-        recordHistory(response);
+        recordHistory(response, historyContext);
         return response;
     }
 
-    private void recordHistory(QuizBookmarkUpdateResponse response) {
+    private void recordHistory(QuizBookmarkUpdateResponse response, QuizHistoryRepository.HistoryContext historyContext) {
         if (quizHistoryService == null) {
             return;
         }
-        int savedCount = quizHistoryService.record(response);
+        int savedCount = quizHistoryService.record(response, historyContext);
         log.info("quiz.history recorded: savedCount={}", savedCount);
     }
 
@@ -555,6 +560,10 @@ public class QuizService {
     }
 
     private long resolveUserId(String discordSenderId) {
+        return resolveRequiredUserId(discordSenderId);
+    }
+
+    public long resolveRequiredUserId(String discordSenderId) {
         String safeSenderId = discordSenderId != null ? discordSenderId.trim() : "";
         if (safeSenderId.isBlank()) {
             throw new IllegalArgumentException("discordSenderId is required");
@@ -565,6 +574,10 @@ public class QuizService {
         return userRepository.findByDiscordSenderId(safeSenderId)
             .map(UserRepository.UserRecord::id)
             .orElseThrow(() -> new IllegalArgumentException("Unknown discordSenderId. Run /join first."));
+    }
+
+    public List<String> normalizeQuizLevels(List<String> levels) {
+        return normalizeLevels(levels);
     }
 
     private List<String> normalizeLevels(List<String> levels) {

@@ -5,6 +5,7 @@ import com.blue.learnjp.dto.QuizHistoryDailyResponse;
 import com.blue.learnjp.dto.QuizHistoryEntry;
 import com.blue.learnjp.repository.GraphRepository;
 import com.blue.learnjp.repository.QuizHistoryRepository;
+import com.blue.learnjp.repository.QuizHistoryRepository.HistoryContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -34,13 +35,18 @@ public class QuizHistoryService {
     }
 
     public int record(QuizBookmarkUpdateResponse response) {
+        return record(response, null);
+    }
+
+    public int record(QuizBookmarkUpdateResponse response, HistoryContext context) {
         if (response == null || response.targetResults() == null || response.targetResults().isEmpty()) {
             return 0;
         }
         return repository.saveTargetResults(
             UUID.randomUUID().toString(),
             Instant.now(),
-            response.targetResults()
+            response.targetResults(),
+            context
         );
     }
 

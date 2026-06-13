@@ -52,6 +52,10 @@ public class QuizHistoryRepository {
                         bookmark INTEGER
                     )
                     """);
+                addColumnIfMissing(connection, "quiz_history", "user_id", "INTEGER");
+                addColumnIfMissing(connection, "quiz_history", "scope_id", "TEXT");
+                addColumnIfMissing(connection, "quiz_history", "problem_id", "TEXT");
+                addColumnIfMissing(connection, "quiz_history", "answer_id", "TEXT");
                 statement.executeUpdate("""
                     CREATE INDEX IF NOT EXISTS idx_quiz_history_occurred_at
                     ON quiz_history (occurred_at)
@@ -59,6 +63,10 @@ public class QuizHistoryRepository {
                 statement.executeUpdate("""
                     CREATE INDEX IF NOT EXISTS idx_quiz_history_word_id
                     ON quiz_history (word_id)
+                    """);
+                statement.executeUpdate("""
+                    CREATE INDEX IF NOT EXISTS idx_quiz_history_scope_problem
+                    ON quiz_history (scope_id, problem_id)
                     """);
             }
         } catch (IOException | SQLException e) {
@@ -68,14 +76,21 @@ public class QuizHistoryRepository {
 
     public int saveTargetResults(String turnId, Instant occurredAt,
                                  List<QuizBookmarkUpdateResponse.TargetResult> targetResults) {
+        return saveTargetResults(turnId, occurredAt, targetResults, null);
+    }
+
+    public int saveTargetResults(String turnId, Instant occurredAt,
+                                 List<QuizBookmarkUpdateResponse.TargetResult> targetResults,
+                                 HistoryContext context) {
         if (targetResults == null || targetResults.isEmpty()) {
             return 0;
         }
 
         String sql = """
             INSERT INTO quiz_history (
-                turn_id, occurred_at, word_id, lemma, reading, source, meaning, result, bookmark
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                turn_id, occurred_at, word_id, lemma, reading, source, meaning, result, bookmark,
+                user_id, scope_id, problem_id, answer_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
         int saved = 0;
         try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -102,6 +117,14 @@ public class QuizHistoryRepository {
                 } else {
                     statement.setObject(9, null);
                 }
+                if (context != null && context.userId() != null) {
+                    statement.setLong(10, context.userId());
+                } else {
+                    statement.setObject(10, null);
+                }
+                statement.setString(11, context != null ? blankToNull(context.scopeId()) : null);
+                statement.setString(12, context != null ? blankToNull(context.problemId()) : null);
+                statement.setString(13, context != null ? blankToNull(context.answerId()) : null);
                 statement.addBatch();
                 saved++;
             }
@@ -155,6 +178,27 @@ public class QuizHistoryRepository {
         return connection;
     }
 
+    private void addColumnIfMissing(Connection connection, String tableName, String columnName, String definition) throws SQLException {
+        if (hasColumn(connection, tableName, columnName)) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ALTER TABLE " + tableName + " ADD COLUMN " + columnName + " " + definition);
+        }
+    }
+
+    private boolean hasColumn(Connection connection, String tableName, String columnName) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet resultSet = statement.executeQuery("PRAGMA table_info(" + tableName + ")")) {
+            while (resultSet.next()) {
+                if (columnName.equals(resultSet.getString("name"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     private String normalizeOutcome(String outcome) {
         if ("correct".equals(outcome) || "wrong".equals(outcome) || "unchanged".equals(outcome)) {
             return outcome;
@@ -170,4 +214,11 @@ public class QuizHistoryRepository {
         int value = resultSet.getInt(column);
         return resultSet.wasNull() ? null : value;
     }
+
+    public record HistoryContext(
+        Long userId,
+        String scopeId,
+        String problemId,
+        String answerId
+    ) {}
 }
