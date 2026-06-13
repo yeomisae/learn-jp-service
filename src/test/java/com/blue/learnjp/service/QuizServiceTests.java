@@ -7,6 +7,7 @@ import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
+import com.blue.learnjp.repository.UserRepository;
 import com.blue.learnjp.repository.UserWordStateRepository;
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +20,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 class QuizServiceTests {
+
+    private static final String SENDER_ID = "sender-1";
+    private static final long USER_ID = 42L;
+
+    private QuizService quizService(GraphRepository graphRepository, NaverJakoDictionaryService jakoService) {
+        return quizService(graphRepository, jakoService, null);
+    }
+
+    private QuizService quizService(GraphRepository graphRepository, NaverJakoDictionaryService jakoService,
+                                    UserWordStateRepository userWordStateRepository) {
+        UserRepository userRepository = mock(UserRepository.class);
+        when(userRepository.findByDiscordSenderId(SENDER_ID))
+            .thenReturn(Optional.of(new UserRepository.UserRecord(USER_ID, "BLUE", SENDER_ID)));
+        return new QuizService(graphRepository, jakoService, null, userWordStateRepository, userRepository);
+    }
 
     @Test
     void createWordSetUsesDefaultJlptStrategyAndSelectsRequiredWord() {
@@ -87,11 +103,11 @@ class QuizServiceTests {
             )
         ));
 
-        QuizService quizService = new QuizService(graphRepository, jakoService);
+        QuizService quizService = quizService(graphRepository, jakoService);
 
         QuizWordSetResponse response = quizService.createWordSet(new QuizWordSetRequest(
             null, null, null, null, null, null, null,
-            null
+            SENDER_ID
         ));
 
         assertThat(response.strategyUsed()).isEqualTo("random_jlpt");
@@ -123,7 +139,7 @@ class QuizServiceTests {
         when(graphRepository.findQuizTargetCandidatesBySources(anyList(), anyList(), anyInt(), anyBoolean(), anyBoolean(), anyBoolean()))
             .thenReturn(List.of());
 
-        QuizService quizService = new QuizService(graphRepository, jakoService);
+        QuizService quizService = quizService(graphRepository, jakoService);
 
         quizService.createWordSet(new QuizWordSetRequest(
             "random_jlpt",
@@ -133,7 +149,7 @@ class QuizServiceTests {
             false,
             true,
             false,
-            null
+            SENDER_ID
         ));
 
         verify(graphRepository).findQuizTargetCandidatesBySources(
@@ -208,11 +224,11 @@ class QuizServiceTests {
                 )
             ));
 
-        QuizService quizService = new QuizService(graphRepository, jakoService);
+        QuizService quizService = quizService(graphRepository, jakoService);
 
         QuizWordSetResponse response = quizService.createWordSet(new QuizWordSetRequest(
             "random_jlpt", List.of("N5"), 3, List.of(), true, true, true,
-            null
+            SENDER_ID
         ));
 
         assertThat(response.requiredWord().lemma()).isEqualTo("辞書");
@@ -222,11 +238,11 @@ class QuizServiceTests {
 
     @Test
     void createWordSetRejectsUnsupportedStrategy() {
-        QuizService quizService = new QuizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
+        QuizService quizService = quizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
 
         assertThatThrownBy(() -> quizService.createWordSet(new QuizWordSetRequest(
             "connected", List.of("N5"), 3, List.of(), true, true, true,
-            null
+            SENDER_ID
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("Unsupported strategy");
@@ -234,14 +250,46 @@ class QuizServiceTests {
 
     @Test
     void createWordSetRejectsUnsupportedLevel() {
-        QuizService quizService = new QuizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
+        QuizService quizService = quizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
 
         assertThatThrownBy(() -> quizService.createWordSet(new QuizWordSetRequest(
             "random_jlpt", List.of("N0"), 3, List.of(), true, true, true,
-            null
+            SENDER_ID
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("Unsupported level");
+    }
+
+    @Test
+    void createWordSetRejectsMissingDiscordSenderId() {
+        QuizService quizService = quizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
+
+        assertThatThrownBy(() -> quizService.createWordSet(new QuizWordSetRequest(
+            "random_jlpt", List.of("N5"), 3, List.of(), true, true, true,
+            null
+        )))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("discordSenderId is required");
+    }
+
+    @Test
+    void createWordSetRejectsUnknownDiscordSenderId() {
+        UserRepository userRepository = mock(UserRepository.class);
+        when(userRepository.findByDiscordSenderId("unknown-sender")).thenReturn(Optional.empty());
+        QuizService quizService = new QuizService(
+            mock(GraphRepository.class),
+            mock(NaverJakoDictionaryService.class),
+            null,
+            null,
+            userRepository
+        );
+
+        assertThatThrownBy(() -> quizService.createWordSet(new QuizWordSetRequest(
+            "random_jlpt", List.of("N5"), 3, List.of(), true, true, true,
+            "unknown-sender"
+        )))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("Unknown discordSenderId. Run /join first.");
     }
 
     @Test
@@ -254,20 +302,20 @@ class QuizServiceTests {
                 "word-pharmacy", Map.of("wordId", "word-pharmacy", "lemma", "薬局", "reading", "やっきょく", "source", "JLPT:N5", "meaning", "약국"),
                 "word-medicine", Map.of("wordId", "word-medicine", "lemma", "薬", "reading", "くすり", "source", "JLPT:N5", "meaning", "약")
             ));
-        when(userWordStateRepository.adjustBookmarks(UserWordStateRepository.DEFAULT_USER_ID, Map.of(
+        when(userWordStateRepository.adjustBookmarks(USER_ID, Map.of(
             "word-pharmacy", -1,
             "word-medicine", 1
         ))).thenReturn(2);
-        when(userWordStateRepository.findBookmarks(UserWordStateRepository.DEFAULT_USER_ID, List.of("word-pharmacy", "word-medicine")))
+        when(userWordStateRepository.findBookmarks(USER_ID, List.of("word-pharmacy", "word-medicine")))
             .thenReturn(Map.of("word-pharmacy", -4, "word-medicine", -2));
 
-        QuizService quizService = new QuizService(graphRepository, jakoService, userWordStateRepository);
+        QuizService quizService = quizService(graphRepository, jakoService, userWordStateRepository);
 
         QuizBookmarkUpdateResponse response = quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("word-pharmacy", "word-medicine"),
             List.of(" word-pharmacy ", ""),
             List.of("word-medicine"),
-            null
+            SENDER_ID
         ));
 
         assertThat(response.updatedCount()).isEqualTo(2);
@@ -288,7 +336,7 @@ class QuizServiceTests {
 
     @Test
     void updateBookmarksRejectsOverlappingWordIds() {
-        QuizService quizService = new QuizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
+        QuizService quizService = quizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
 
         assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("word-pharmacy"),
@@ -302,7 +350,7 @@ class QuizServiceTests {
 
     @Test
     void updateBookmarksRejectsWordIdsOutsideTargetSet() {
-        QuizService quizService = new QuizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
+        QuizService quizService = quizService(mock(GraphRepository.class), mock(NaverJakoDictionaryService.class));
 
         assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("word-target"),
@@ -320,13 +368,13 @@ class QuizServiceTests {
         NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
         when(graphRepository.findWordsByWordIds(List.of("missing-word"))).thenReturn(Map.of());
 
-        QuizService quizService = new QuizService(graphRepository, jakoService);
+        QuizService quizService = quizService(graphRepository, jakoService);
 
         assertThatThrownBy(() -> quizService.updateBookmarks(new QuizBookmarkUpdateRequest(
             List.of("missing-word"),
             List.of(),
             List.of(),
-            null
+            SENDER_ID
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("Unknown targetWordIds");
@@ -345,8 +393,9 @@ class QuizServiceTests {
                 "source", "JLPT:N5,EXAMPLE:JLPT_EDGE_BACKFILL",
                 "meaning", "먹다, 먹이를 먹다."
             )));
-        when(userWordStateRepository.adjustBookmarks(UserWordStateRepository.DEFAULT_USER_ID, Map.of("word-eat", 1))).thenReturn(1);
-        when(userWordStateRepository.findBookmarks(UserWordStateRepository.DEFAULT_USER_ID, List.of("word-eat"))).thenReturn(Map.of("word-eat", -2));
+        when(userWordStateRepository.adjustBookmarks(USER_ID, Map.of("word-eat", 1))).thenReturn(1);
+        when(userWordStateRepository.findBookmarks(USER_ID, List.of("word-eat"))).thenReturn(Map.of("word-eat", -2));
+        when(userWordStateRepository.findBookmarks(USER_ID, List.of("word-water"))).thenReturn(Map.of("word-water", 0));
         when(graphRepository.findQuizTargetCandidatesBySources(
             List.of("JLPT:N5"),
             List.of("食べる"),
@@ -384,7 +433,7 @@ class QuizServiceTests {
             eq(true)
         )).thenReturn(List.of());
 
-        QuizService quizService = new QuizService(graphRepository, jakoService, userWordStateRepository);
+        QuizService quizService = quizService(graphRepository, jakoService, userWordStateRepository);
 
         QuizTurnResponse response = quizService.processTurn(new QuizTurnRequest(
             "random_jlpt",
@@ -397,7 +446,7 @@ class QuizServiceTests {
             List.of("word-eat"),
             List.of(),
             List.of("word-eat"),
-            null
+            SENDER_ID
         ));
 
         assertThat(response.bookmark().updatedCount()).isEqualTo(1);

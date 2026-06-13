@@ -271,19 +271,12 @@ public class QuizService {
             .toList();
     }
 
-    private Map<String, Integer> findBookmarks(List<String> wordIds) {
-        return findBookmarks(UserWordStateRepository.DEFAULT_USER_ID, wordIds);
-    }
-
     private Map<String, Integer> findBookmarks(long userId, List<String> wordIds) {
         if (wordIds == null || wordIds.isEmpty() || userWordStateRepository == null) {
             return Map.of();
         }
-        return userWordStateRepository.findBookmarks(userId, wordIds);
-    }
-
-    private int adjustUserWordBookmarks(Map<String, Integer> updatableDeltas) {
-        return adjustUserWordBookmarks(UserWordStateRepository.DEFAULT_USER_ID, updatableDeltas);
+        Map<String, Integer> bookmarks = userWordStateRepository.findBookmarks(userId, wordIds);
+        return bookmarks != null ? bookmarks : Map.of();
     }
 
     private int adjustUserWordBookmarks(long userId, Map<String, Integer> updatableDeltas) {
@@ -564,10 +557,10 @@ public class QuizService {
     private long resolveUserId(String discordSenderId) {
         String safeSenderId = discordSenderId != null ? discordSenderId.trim() : "";
         if (safeSenderId.isBlank()) {
-            return UserWordStateRepository.DEFAULT_USER_ID;
+            throw new IllegalArgumentException("discordSenderId is required");
         }
         if (userRepository == null) {
-            return UserWordStateRepository.DEFAULT_USER_ID;
+            throw new IllegalArgumentException("User repository is required");
         }
         return userRepository.findByDiscordSenderId(safeSenderId)
             .map(UserRepository.UserRecord::id)
