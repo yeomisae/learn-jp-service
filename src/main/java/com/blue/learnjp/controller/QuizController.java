@@ -17,8 +17,6 @@ import com.blue.learnjp.dto.QuizSessionRequest;
 import com.blue.learnjp.dto.QuizSessionResponse;
 import com.blue.learnjp.dto.QuizStartRequest;
 import com.blue.learnjp.dto.QuizStartResponse;
-import com.blue.learnjp.dto.QuizTurnRequest;
-import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.service.QuizHistoryService;
@@ -60,16 +58,6 @@ public class QuizController {
     public ResponseEntity<?> updateBookmarks(@RequestBody(required = false) QuizBookmarkUpdateRequest request) {
         try {
             QuizBookmarkUpdateResponse response = quizService.updateBookmarks(request);
-            return ResponseEntity.ok(response);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        }
-    }
-
-    @PostMapping("/turn")
-    public ResponseEntity<?> processTurn(@RequestBody(required = false) QuizTurnRequest request) {
-        try {
-            QuizTurnResponse response = quizService.processTurn(request);
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

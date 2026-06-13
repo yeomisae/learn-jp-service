@@ -2,8 +2,6 @@ package com.blue.learnjp.service;
 
 import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
-import com.blue.learnjp.dto.QuizTurnRequest;
-import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
@@ -378,83 +376,6 @@ class QuizServiceTests {
         )))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("Unknown targetWordIds");
-    }
-
-    @Test
-    void processTurnUpdatesBookmarksAndCreatesNextWordSet() {
-        GraphRepository graphRepository = mock(GraphRepository.class);
-        NaverJakoDictionaryService jakoService = mock(NaverJakoDictionaryService.class);
-        UserWordStateRepository userWordStateRepository = mock(UserWordStateRepository.class);
-        when(graphRepository.findWordsByWordIds(List.of("word-eat")))
-            .thenReturn(Map.of("word-eat", Map.of(
-                "wordId", "word-eat",
-                "lemma", "食べる",
-                "reading", "たべる",
-                "source", "JLPT:N5,EXAMPLE:JLPT_EDGE_BACKFILL",
-                "meaning", "먹다, 먹이를 먹다."
-            )));
-        when(userWordStateRepository.adjustBookmarks(USER_ID, Map.of("word-eat", 1))).thenReturn(1);
-        when(userWordStateRepository.findBookmarks(USER_ID, List.of("word-eat"))).thenReturn(Map.of("word-eat", -2));
-        when(userWordStateRepository.findBookmarks(USER_ID, List.of("word-water"))).thenReturn(Map.of("word-water", 0));
-        when(graphRepository.findQuizTargetCandidatesBySources(
-            List.of("JLPT:N5"),
-            List.of("食べる"),
-            500,
-            true,
-            true,
-            true
-        )).thenReturn(List.of(Map.of(
-            "wordId", "word-water",
-            "lemma", "水",
-            "reading", "みず",
-            "meaning", "물",
-            "pos", "명사",
-            "posDetail", "名詞",
-            "posDesc", "명사",
-            "source", "JLPT:N5",
-            "starGrade", 1,
-            "dictEntryId", "dict-water"
-        )));
-        when(graphRepository.findQuizCandidateWordsByEdge(
-            eq("水"),
-            eq(List.of("JLPT:N5")),
-            eq(List.of("食べる", "水")),
-            eq(50),
-            eq(true),
-            eq(true),
-            eq(true)
-        )).thenReturn(List.of());
-        when(graphRepository.findQuizWordsBySources(
-            eq(List.of("JLPT:N5")),
-            eq(List.of("食べる", "水")),
-            eq(50),
-            eq(true),
-            eq(true),
-            eq(true)
-        )).thenReturn(List.of());
-
-        QuizService quizService = quizService(graphRepository, jakoService, userWordStateRepository);
-
-        QuizTurnResponse response = quizService.processTurn(new QuizTurnRequest(
-            "random_jlpt",
-            List.of("N5"),
-            2,
-            List.of("食べる"),
-            true,
-            true,
-            true,
-            List.of("word-eat"),
-            List.of(),
-            List.of("word-eat"),
-            SENDER_ID
-        ));
-
-        assertThat(response.bookmark().updatedCount()).isEqualTo(1);
-        assertThat(response.targetDisplayLines()).containsExactly("• 食べる(たべる): N5, 먹다 ✅ (-2)");
-        assertThat(response.mustCopyTargetBlock()).isEqualTo("출제단어:\n\n• 食べる(たべる): N5, 먹다 ✅ (-2)");
-        assertThat(response.mustCopySeparator()).isEqualTo("———");
-        assertThat(response.wordSet().requiredWord().lemma()).isEqualTo("水");
-        assertThat(response.status()).isEqualTo("ok");
     }
 
 }

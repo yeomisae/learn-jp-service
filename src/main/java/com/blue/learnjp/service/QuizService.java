@@ -2,8 +2,6 @@ package com.blue.learnjp.service;
 
 import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
-import com.blue.learnjp.dto.QuizTurnRequest;
-import com.blue.learnjp.dto.QuizTurnResponse;
 import com.blue.learnjp.dto.QuizWordSetRequest;
 import com.blue.learnjp.dto.QuizWordSetResponse;
 import com.blue.learnjp.repository.GraphRepository;
@@ -160,44 +158,6 @@ public class QuizService {
         );
     }
 
-    public QuizTurnResponse processTurn(QuizTurnRequest request) {
-        QuizWordSetRequest preliminaryWordSetRequest = toWordSetRequest(request, null);
-        NormalizedRequest normalized = normalize(preliminaryWordSetRequest);
-        log.info(
-            "quiz.turn request: levels={}, count={}, targetWordIds={}, wrongWordIds={}, correctWordIds={}, targetIds={}, wrongIds={}, correctIds={}",
-            displayLevels(normalized.sources()),
-            normalized.count(),
-            sizeOf(request != null ? request.targetWordIds() : null),
-            sizeOf(request != null ? request.wrongWordIds() : null),
-            sizeOf(request != null ? request.correctWordIds() : null),
-            displayIds(request != null ? request.targetWordIds() : null),
-            displayIds(request != null ? request.wrongWordIds() : null),
-            displayIds(request != null ? request.correctWordIds() : null)
-        );
-
-        QuizBookmarkUpdateResponse bookmark = updateBookmarks(toBookmarkUpdateRequest(request));
-        QuizWordSetRequest wordSetRequest = toWordSetRequest(request, bookmark);
-
-        QuizWordSetResponse wordSet = createWordSet(wordSetRequest);
-        List<String> targetDisplayLines = buildTargetDisplayLines(bookmark);
-        log.info(
-            "quiz.turn completed: updatedCount={}, appliedDeltas={}, targetLemmas={}, nextWords={}, nextWordIds={}",
-            bookmark.updatedCount(),
-            bookmark.appliedDeltas().size(),
-            targetLemmasFrom(bookmark),
-            wordSet.returnedCount(),
-            displayIds(wordSet.words().stream().map(QuizWordSetResponse.QuizWord::wordId).toList())
-        );
-        return new QuizTurnResponse(
-            bookmark,
-            targetDisplayLines,
-            "출제단어:\n\n" + String.join("\n", targetDisplayLines),
-            "———",
-            wordSet,
-            "ok"
-        );
-    }
-
     private int candidateSampleLimit(int requested) {
         if (requested <= 0) {
             return 0;
@@ -340,79 +300,6 @@ public class QuizService {
         return List.copyOf(results);
     }
 
-    private List<String> buildTargetDisplayLines(QuizBookmarkUpdateResponse bookmark) {
-        if (bookmark == null || bookmark.targetResults() == null || bookmark.targetResults().isEmpty()) {
-            return List.of("• 기록 없음");
-        }
-
-        List<String> lines = new ArrayList<>();
-        for (QuizBookmarkUpdateResponse.TargetResult result : bookmark.targetResults()) {
-            if (result.lemma() == null || result.lemma().isBlank()) {
-                continue;
-            }
-            lines.add("• " + formatTargetWord(result) + " " + resultMark(result.result()) + " ("
-                + (result.bookmark() != null ? result.bookmark() : "-") + ")");
-        }
-        return lines.isEmpty() ? List.of("• 기록 없음") : List.copyOf(lines);
-    }
-
-    private String formatTargetWord(QuizBookmarkUpdateResponse.TargetResult result) {
-        StringBuilder text = new StringBuilder(result.lemma());
-        if (result.reading() != null && !result.reading().isBlank()
-            && !result.reading().equals(result.lemma())) {
-            text.append("(").append(result.reading()).append(")");
-        }
-        text.append(": ").append(displaySource(result.source()));
-        String meaning = compactMeaning(result.meaning());
-        if (!meaning.isBlank()) {
-            text.append(", ").append(meaning);
-        }
-        return text.toString();
-    }
-
-    private String displaySource(String source) {
-        if (source == null || source.isBlank()) {
-            return "-";
-        }
-        for (String part : source.split(",")) {
-            String trimmed = part.trim();
-            if (trimmed.startsWith("JLPT:")) {
-                return trimmed.substring("JLPT:".length());
-            }
-        }
-        return source.split(",")[0].trim();
-    }
-
-    private String compactMeaning(String meaning) {
-        if (meaning == null || meaning.isBlank()) {
-            return "";
-        }
-        String compact = meaning.trim();
-        int comma = compact.indexOf(',');
-        int period = compact.indexOf('.');
-        int cut = -1;
-        if (comma >= 0 && period >= 0) {
-            cut = Math.min(comma, period);
-        } else if (comma >= 0) {
-            cut = comma;
-        } else if (period >= 0) {
-            cut = period;
-        }
-        if (cut > 0) {
-            compact = compact.substring(0, cut).trim();
-        }
-        return compact;
-    }
-
-    private String resultMark(String result) {
-        return switch (result != null ? result : "") {
-            case "correct" -> "✅";
-            case "wrong" -> "❌";
-            case "missing" -> "?";
-            default -> "➖";
-        };
-    }
-
     public QuizBookmarkUpdateResponse updateBookmarks(QuizBookmarkUpdateRequest request) {
         return updateBookmarks(request, null);
     }
@@ -495,22 +382,6 @@ public class QuizService {
         );
     }
 
-    private QuizWordSetRequest toWordSetRequest(QuizTurnRequest request, QuizBookmarkUpdateResponse bookmark) {
-        if (request == null) {
-            return null;
-        }
-        return new QuizWordSetRequest(
-            request.strategy(),
-            request.levels(),
-            request.count(),
-            withAdditionalExcludes(request.excludeLemmas(), targetLemmasFrom(bookmark)),
-            request.requireReading(),
-            request.requireMeaning(),
-            request.requireDictEntry(),
-            request.discordSenderId()
-        );
-    }
-
     private List<String> targetLemmasFrom(QuizBookmarkUpdateResponse bookmark) {
         if (bookmark == null || bookmark.targetResults() == null || bookmark.targetResults().isEmpty()) {
             return List.of();
@@ -519,18 +390,6 @@ public class QuizService {
             .map(QuizBookmarkUpdateResponse.TargetResult::lemma)
             .filter(lemma -> lemma != null && !lemma.isBlank())
             .toList();
-    }
-
-    private QuizBookmarkUpdateRequest toBookmarkUpdateRequest(QuizTurnRequest request) {
-        if (request == null) {
-            return null;
-        }
-        return new QuizBookmarkUpdateRequest(
-            request.targetWordIds(),
-            request.wrongWordIds(),
-            request.correctWordIds(),
-            request.discordSenderId()
-        );
     }
 
     private NormalizedRequest normalize(QuizWordSetRequest request) {
@@ -675,21 +534,8 @@ public class QuizService {
         return List.copyOf(normalized);
     }
 
-    private int sizeOf(List<?> values) {
-        return values != null ? values.size() : 0;
-    }
-
     private long countDeltas(Map<String, Integer> deltas, int value) {
         return deltas.values().stream().filter(delta -> delta == value).count();
-    }
-
-    private List<String> displayLevels(List<String> sources) {
-        if (sources == null || sources.isEmpty()) {
-            return List.of();
-        }
-        return sources.stream()
-            .map(source -> source != null && source.startsWith("JLPT:") ? source.substring("JLPT:".length()) : source)
-            .toList();
     }
 
     private List<String> displayIds(List<String> ids) {
