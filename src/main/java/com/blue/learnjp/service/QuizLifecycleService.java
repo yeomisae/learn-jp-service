@@ -10,6 +10,7 @@ import com.blue.learnjp.dto.QuizBookmarkUpdateRequest;
 import com.blue.learnjp.dto.QuizBookmarkUpdateResponse;
 import com.blue.learnjp.dto.QuizNextProblemRequest;
 import com.blue.learnjp.dto.QuizNextProblemResponse;
+import com.blue.learnjp.dto.QuizOpenAnswerSubmitRequest;
 import com.blue.learnjp.dto.QuizPendingAnswerResponse;
 import com.blue.learnjp.dto.QuizProblemCreateRequest;
 import com.blue.learnjp.dto.QuizProblemDraftRequest;
@@ -244,6 +245,20 @@ public class QuizLifecycleService {
             bookmark != null ? buildTargetDisplayLines(bookmark) : List.of("• 미채점"),
             "ok"
         );
+    }
+
+    public QuizAnswerSubmitResponse submitOpenAnswer(QuizOpenAnswerSubmitRequest request) {
+        ScopeRecord scope = normalizeScope(request != null ? request.scope() : null);
+        ProblemRecord problem = repository.findOpenProblem(scope.scopeId())
+            .orElseThrow(() -> new IllegalArgumentException("Open quiz problem not found"));
+        return submitAnswer(problem.id(), new QuizAnswerSubmitRequest(
+            request != null ? request.discordSenderId() : null,
+            request != null ? request.displayName() : null,
+            request != null ? request.answerText() : null,
+            request != null ? request.overallResult() : null,
+            request != null ? request.feedback() : null,
+            request != null ? request.results() : null
+        ));
     }
 
     public QuizAnswerGradeSubmitResponse gradeAnswers(String problemId, QuizAnswerGradeSubmitRequest request) {

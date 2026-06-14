@@ -8,6 +8,7 @@ import com.blue.learnjp.dto.QuizAnswerSubmitRequest;
 import com.blue.learnjp.dto.QuizAnswerSubmitResponse;
 import com.blue.learnjp.dto.QuizNextProblemRequest;
 import com.blue.learnjp.dto.QuizNextProblemResponse;
+import com.blue.learnjp.dto.QuizOpenAnswerSubmitRequest;
 import com.blue.learnjp.dto.QuizProblemCreateRequest;
 import com.blue.learnjp.dto.QuizProblemDraftRequest;
 import com.blue.learnjp.dto.QuizProblemDraftResponse;
@@ -129,6 +130,16 @@ public class QuizController {
                                           @RequestBody(required = false) QuizAnswerSubmitRequest request) {
         try {
             QuizAnswerSubmitResponse response = quizLifecycleService.submitAnswer(problemId, request);
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/answers/submit-open")
+    public ResponseEntity<?> submitOpenAnswer(@RequestBody(required = false) QuizOpenAnswerSubmitRequest request) {
+        try {
+            QuizAnswerSubmitResponse response = quizLifecycleService.submitOpenAnswer(request);
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
